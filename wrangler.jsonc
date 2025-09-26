@@ -1,0 +1,24 @@
+/**
+ * For more details on how to configure Wrangler, refer to:
+ * https://developers.cloudflare.com/workers/wrangler/configuration/
+ */
+{
+	"$schema": "node_modules/wrangler/config-schema.json",
+	"name": "bigscoots-v2-gateway-test",
+	"main": "src/index.ts",
+	"compatibility_date": "2025-09-22",
+	"observability": {
+		"enabled": true
+	},
+	"routes": [
+    {
+      "pattern": "v2-cloudflare.bigscoots.dev/*",
+      "zone_name": "bigscoots.dev"
+    }
+  ],
+	"vars": {
+		"AUTH0_ISSUER": "https://dev-d12fwlrflc607aca.us.auth0.com/",
+		"AUTH0_AUDIENCE": "https://dev-d12fwlrflc607aca.us.auth0.com/api/v2/",
+		"JWKS_URL": "https://dev-d12fwlrflc607aca.us.auth0.com/.well-known/jwks.json"
+	}
+}
