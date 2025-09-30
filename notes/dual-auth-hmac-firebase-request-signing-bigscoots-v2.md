@@ -26,7 +26,7 @@ Both mechanisms must coexist on the **same API endpoints**. Cloudflare Workers w
 * **Cloudflare Workers** decide which verification path to use:
 
   * `Authorization: Bearer …` → validate JWT (Firebase or Auth0) with cached JWKS.
-  * `X-API-Key` / `X-Signature` headers → HMAC verification with Workers KV lookup.
+  * `X-API-Key` / `X-Key-Id`, `X-Signature`, headers → HMAC verification with Workers KV lookup.
 * Both inject **identity headers** (`X-Auth-Type`, `X-Org-Id`, `X-Client-Id`, `X-Scopes`) into requests passed to backend services.
 * Backend authorization is uniform: scope + org isolation enforced consistently.
 * Rate limiting, replay protection, rotation, and quotas are applied per org/client using Durable Objects.
@@ -694,7 +694,7 @@ Document how Cloudflare Workers enforce **both** authentication methods (JWT for
 * Use **header-based logic** so the *same paths* accept either auth:
 
   * If the request has `Authorization: Bearer …` → run **JWT validation** (Firebase/Auth0).
-  * If it has `X-API-Key` / `X-Signature` → run **HMAC validation**.
+  * If it has `X-API-Key` / `X-Key-Id`, `X-Signature` → run **HMAC validation**.
 * Apply **WAF rate limits** globally and **per-client quotas** via Durable Objects.
 * Worker routes authenticated requests to appropriate backend services with identity headers injected.
 

@@ -5,6 +5,7 @@ interface Env {
   AUTH0_ISSUER: string;
   AUTH0_AUDIENCE: string;
   JWKS_URL: string;
+  KV: KVNamespace;
 }
 
 interface JWKSKey {
@@ -329,6 +330,10 @@ export default {
   async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
 	  const { method, url } = request;
 	  const parsedUrl = new URL(url);
+	  const data = await env.KV.get('key:client123');
+	  const jsonData = await env.KV.get('key:client123', { type: "json" });
+	  console.log("[TEST] String data:", data);
+	  console.log("[TEST] JSON data:", jsonData);
   
     // Request logging
 	  console.log(

@@ -11,11 +11,18 @@
 		"enabled": true
 	},
 	"routes": [
-    {
-      "pattern": "v2-cloudflare.bigscoots.dev/*",
-      "zone_name": "bigscoots.dev"
-    }
-  ],
+		{
+			"pattern": "v2-cloudflare.bigscoots.dev/*",
+			"zone_name": "bigscoots.dev"
+		}
+	],
+	"kv_namespaces": [
+		{
+			"binding": "KV",
+			"id": "f011a3f9cd7e4f74aaee532a07716e29",
+			"preview_id": "3a0ddac0a07b4f57844b92c3e855d6cf"
+		}
+	],
 	"vars": {
 		"AUTH0_ISSUER": "https://dev-d12fwlrflc607aca.us.auth0.com/",
 		"AUTH0_AUDIENCE": "https://dev-d12fwlrflc607aca.us.auth0.com/api/v2/",
