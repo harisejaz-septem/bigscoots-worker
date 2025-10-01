@@ -89,7 +89,17 @@ let jwksCacheTime = 0;
 const JWKS_CACHE_TTL = 3600000; // 1 hour in milliseconds
 
 /**
- * Fetch and cache JWKS from Auth0
+ * JWT Step 1: Fetch and cache JWKS from Auth0
+ * 
+ * Downloads RSA public keys from Auth0's JWKS endpoint and caches them for 1 hour.
+ * JWKS (JSON Web Key Set) contains the public keys needed to verify JWT signatures.
+ * 
+ * @param jwksUrl - Auth0 JWKS endpoint URL (e.g., "https://dev-xyz.auth0.com/.well-known/jwks.json")
+ * @returns Promise resolving to JWKS containing RSA public keys
+ * 
+ * @example
+ * const jwks = await fetchJWKS("https://dev-xyz.auth0.com/.well-known/jwks.json");
+ * // Returns: { keys: [{ kid: "abc123", kty: "RSA", n: "...", e: "AQAB" }] }
  */
 async function fetchJWKS(jwksUrl: string): Promise<JWKS> {
   const now = Date.now();
@@ -117,14 +127,31 @@ async function fetchJWKS(jwksUrl: string): Promise<JWKS> {
 }
 
 /**
- * Find JWK by kid
+ * JWT Step 2: Find matching public key by key ID
+ * 
+ * Searches through JWKS keys to find the one with matching 'kid' (key ID) from JWT header.
+ * Each JWT header contains a 'kid' field that identifies which key was used to sign it.
+ * 
+ * @param jwks - JWKS object containing array of public keys
+ * @param kid - Key ID from JWT header (e.g., "9E5ZC9HGi1BFyjH49M5OU")
+ * @returns Matching JWK or null if not found
+ * 
+ * @example
+ * const jwk = findJWKByKid(jwks, "9E5ZC9HGi1BFyjH49M5OU");
+ * // Returns: { kid: "9E5ZC9HGi1BFyjH49M5OU", kty: "RSA", n: "...", e: "AQAB" }
  */
 function findJWKByKid(jwks: JWKS, kid: string): JWKSKey | null {
   return jwks.keys.find(key => key.kid === kid) || null;
 }
 
 /**
- * Convert JWK to CryptoKey for verification
+ * JWT Step 3: Convert JWK to WebCrypto key for verification
+ * 
+ * Transforms Auth0's JWK format into a WebCrypto CryptoKey object that can verify RS256 signatures.
+ * Configures the key specifically for RSASSA-PKCS1-v1_5 with SHA-256 hashing.
+ * 
+ * @param jwk - JSON Web Key with RSA components (n, e, kty, alg)
+ * @returns Promise resolving to CryptoKey for signature verification
  */
 async function jwkToCryptoKey(jwk: JWKSKey): Promise<CryptoKey> {
   const keyData = {
@@ -148,7 +175,17 @@ async function jwkToCryptoKey(jwk: JWKSKey): Promise<CryptoKey> {
 }
 
 /**
- * Decode JWT without verification (for header/payload inspection)
+ * JWT Step 4: Decode JWT token without verification
+ * 
+ * Splits JWT into header and payload parts and base64url decodes them for inspection.
+ * Does NOT verify signature - only extracts data for subsequent validation steps.
+ * 
+ * @param token - Complete JWT string (header.payload.signature)
+ * @returns Object with decoded header and payload
+ * 
+ * @example
+ * const { header, payload } = decodeJWT("eyJhbGc...header.eyJpc3M...payload.signature");
+ * // Returns: { header: { alg: "RS256", kid: "abc123" }, payload: { sub: "user123", exp: 1234567890 } }
  */
 function decodeJWT(token: string): { header: JWTHeader; payload: JWTPayload } {
   const parts = token.split('.');
@@ -167,7 +204,14 @@ function decodeJWT(token: string): { header: JWTHeader; payload: JWTPayload } {
 }
 
 /**
- * Verify JWT signature using WebCrypto
+ * JWT Step 5: Verify JWT signature using WebCrypto
+ * 
+ * Cryptographically verifies that the JWT signature matches the header+payload using RSA public key.
+ * Protects against token tampering by ensuring signature was created with the private key.
+ * 
+ * @param token - Complete JWT string
+ * @param publicKey - RSA public key (from jwkToCryptoKey)
+ * @returns Promise resolving to true if signature is valid, false otherwise
  */
 async function verifyJWTSignature(token: string, publicKey: CryptoKey): Promise<boolean> {
   const parts = token.split('.');
@@ -193,7 +237,17 @@ async function verifyJWTSignature(token: string, publicKey: CryptoKey): Promise<
 }
 
 /**
- * Validate JWT claims
+ * JWT Step 6: Validate JWT claims (security checks)
+ * 
+ * Verifies standard JWT claims to prevent security vulnerabilities:
+ * - exp: Token not expired
+ * - iss: Token issued by trusted Auth0 tenant
+ * - aud: Token intended for our API
+ * 
+ * @param payload - Decoded JWT payload
+ * @param expectedIssuer - Our Auth0 issuer URL
+ * @param expectedAudience - Our API identifier
+ * @throws Error if any claim validation fails
  */
 function validateJWTClaims(payload: JWTPayload, expectedIssuer: string, expectedAudience: string): void {
   const now = Math.floor(Date.now() / 1000);
@@ -216,7 +270,15 @@ function validateJWTClaims(payload: JWTPayload, expectedIssuer: string, expected
 }
 
 /**
- * Extract and validate JWT token
+ * JWT Main Function: Complete JWT validation pipeline
+ * 
+ * Orchestrates the full JWT verification process from token to validated user data.
+ * Combines all JWT steps: decode → find key → verify signature → validate claims.
+ * 
+ * @param token - Raw JWT from Authorization header
+ * @param env - Worker environment with Auth0 configuration
+ * @returns Promise resolving to validated JWT payload with user data
+ * @throws Error if any validation step fails
  */
 async function validateJWT(token: string, env: Env): Promise<JWTPayload> {
   try {
@@ -258,7 +320,17 @@ async function validateJWT(token: string, env: Env): Promise<JWTPayload> {
 }
 
 /**
- * Parse scope string into array
+ * JWT Utility: Parse space-separated scope string into array
+ * 
+ * Converts OAuth2 scope string format into array for easier processing.
+ * Handles empty/missing scope strings gracefully.
+ * 
+ * @param scope - Space-separated scope string from JWT (e.g., "read write admin")
+ * @returns Array of individual scope strings
+ * 
+ * @example
+ * const scopes = parseScopes("sites:read users:write billing:admin");
+ * // Returns: ["sites:read", "users:write", "billing:admin"]
  */
 function parseScopes(scope?: string): string[] {
   if (!scope) return [];
@@ -266,7 +338,19 @@ function parseScopes(scope?: string): string[] {
 }
 
 /**
- * Create error response
+ * Auth Utility: Create standardized JSON error response
+ * 
+ * Generates consistent error responses with proper HTTP status codes and JSON format.
+ * Used for both JWT and HMAC authentication failures.
+ * 
+ * @param error - Error code (e.g., "invalid_token", "unauthorized")
+ * @param description - Human-readable error description
+ * @param status - HTTP status code (401, 403, 429, etc.)
+ * @returns Response object with JSON error body and appropriate headers
+ * 
+ * @example
+ * return createErrorResponse("invalid_token", "JWT signature verification failed", 401);
+ * // Returns: Response with {"error":"invalid_token","error_description":"...","status":401}
  */
 function createErrorResponse(error: string, description: string, status: number): Response {
   const errorBody: AuthError = {
@@ -285,14 +369,34 @@ function createErrorResponse(error: string, description: string, status: number)
 }
 
 /**
- * Check if route is public (bypasses authentication)
+ * Route Utility: Check if route bypasses authentication
+ * 
+ * Determines whether a request path should skip JWT/HMAC validation.
+ * Useful for health checks, documentation, and public endpoints.
+ * 
+ * @param pathname - Request path from URL (e.g., "/health", "/api/docs")
+ * @returns true if route is public, false if authentication required
+ * 
+ * @example
+ * const isPublic = isPublicRoute("/health");
+ * // Returns: true (if "/health" is in PUBLIC_ROUTES array)
  */
 function isPublicRoute(pathname: string): boolean {
   return PUBLIC_ROUTES.some(route => pathname.startsWith(route));
 }
 
 /**
- * Detect authentication method from headers
+ * Auth Detection: Determine authentication method from request headers
+ * 
+ * Examines request headers to identify whether client is using JWT or HMAC authentication.
+ * Enables dual authentication support on the same endpoints.
+ * 
+ * @param request - HTTP request object
+ * @returns 'jwt' if Authorization header present, 'hmac' if X-Key-Id present, 'none' otherwise
+ * 
+ * @example
+ * const authMethod = detectAuthMethod(request);
+ * // Returns: "jwt", "hmac", or "none"
  */
 function detectAuthMethod(request: Request): 'jwt' | 'hmac' | 'none' {
   const authHeader = request.headers.get('Authorization');
@@ -308,7 +412,17 @@ function detectAuthMethod(request: Request): 'jwt' | 'hmac' | 'none' {
 }
 
 /**
- * Extract JWT token from Authorization header
+ * JWT Utility: Extract Bearer token from Authorization header
+ * 
+ * Parses Authorization header to extract JWT token, removing "Bearer " prefix.
+ * Returns null if header is missing or doesn't follow Bearer token format.
+ * 
+ * @param request - HTTP request object
+ * @returns JWT token string or null if not found/invalid format
+ * 
+ * @example
+ * const token = extractJWTToken(request);
+ * // Returns: "eyJhbGciOiJSUzI1NiIs..." (without "Bearer " prefix)
  */
 function extractJWTToken(request: Request): string | null {
   const authHeader = request.headers.get('Authorization');
@@ -320,7 +434,12 @@ function extractJWTToken(request: Request): string | null {
 }
 
 /**
- * Clean up expired nonces from memory
+ * HMAC Utility: Clean expired nonces from memory
+ * 
+ * Removes nonces older than 5 minutes from in-memory cache to prevent memory leaks.
+ * Called automatically before each nonce check to maintain cache size.
+ * 
+ * Note: In production, this should be replaced with Durable Objects for global tracking.
  */
 function cleanupExpiredNonces(): void {
   const now = Date.now();
@@ -332,7 +451,17 @@ function cleanupExpiredNonces(): void {
 }
 
 /**
- * Check and store nonce to prevent replay attacks
+ * HMAC Step 1: Replay attack prevention via nonce tracking
+ * 
+ * Ensures each nonce (UUID) is used only once within the 5-minute window.
+ * Prevents replay attacks where attackers resend valid signed requests.
+ * 
+ * @param nonce - Unique UUID from X-Nonce header
+ * @returns true if nonce is new (request allowed), false if already used (replay attack)
+ * 
+ * @example
+ * const isValid = checkAndStoreNonce("550e8400-e29b-41d4-a716-446655440000");
+ * // Returns: true (first use) or false (replay attack)
  */
 function checkAndStoreNonce(nonce: string): boolean {
   cleanupExpiredNonces();
@@ -346,7 +475,17 @@ function checkAndStoreNonce(nonce: string): boolean {
 }
 
 /**
- * Extract HMAC headers from request
+ * HMAC Step 2: Extract required HMAC headers from request
+ * 
+ * Validates presence of all 5 required HMAC headers for signature verification.
+ * Returns null if any header is missing, preventing incomplete validation attempts.
+ * 
+ * @param request - Incoming HTTP request
+ * @returns HMACHeaders object or null if any required header is missing
+ * 
+ * @example
+ * const headers = extractHMACHeaders(request);
+ * // Returns: { keyId: "live_org_test123", timestamp: "1727712000", nonce: "uuid...", signature: "base64...", contentSHA256: "UNSIGNED-PAYLOAD" }
  */
 function extractHMACHeaders(request: Request): HMACHeaders | null {
   const keyId = request.headers.get('X-Key-Id');
@@ -363,7 +502,17 @@ function extractHMACHeaders(request: Request): HMACHeaders | null {
 }
 
 /**
- * Validate timestamp freshness (within ±300 seconds)
+ * HMAC Step 3: Validate request timestamp freshness
+ * 
+ * Ensures request was signed within ±300 seconds (5 minutes) of current time.
+ * Prevents old signed requests from being replayed hours or days later.
+ * 
+ * @param timestamp - Unix timestamp string from X-Timestamp header
+ * @returns true if timestamp is within acceptable window, false if too old/new
+ * 
+ * @example
+ * const isValid = validateTimestamp("1727712000");
+ * // Returns: true (within ±300s) or false (too old/new)
  */
 function validateTimestamp(timestamp: string): boolean {
   const now = Math.floor(Date.now() / 1000);
@@ -378,7 +527,21 @@ function validateTimestamp(timestamp: string): boolean {
 }
 
 /**
- * Build canonical string for HMAC signature verification
+ * HMAC Step 4: Build canonical string for signature verification
+ * 
+ * Constructs the exact string that was signed by the client, following strict format:
+ * METHOD\nPATH\nQUERY\nSIGNED-HEADERS\nTIMESTAMP\nNONCE\nBODY-HASH
+ * Must match client's canonical string exactly or signature verification fails.
+ * 
+ * @param request - HTTP request object
+ * @param timestamp - Request timestamp
+ * @param nonce - Request nonce
+ * @param contentSHA256 - Body hash or "UNSIGNED-PAYLOAD"
+ * @returns Promise resolving to canonical string for HMAC verification
+ * 
+ * @example
+ * const canonical = await buildCanonicalString(request, "1727712000", "uuid...", "UNSIGNED-PAYLOAD");
+ * // Returns: "POST\n/api/test\nquery=value\ncontent-type:application/json\nhost:api.example.com\n1727712000\nuuid...\nUNSIGNED-PAYLOAD"
  */
 async function buildCanonicalString(
   request: Request, 
@@ -418,7 +581,15 @@ async function buildCanonicalString(
 }
 
 /**
- * Verify HMAC signature using WebCrypto
+ * HMAC Step 5: Verify HMAC-SHA256 signature using WebCrypto
+ * 
+ * Cryptographically verifies that the signature was created using the secret key.
+ * Uses HMAC-SHA256 algorithm to ensure request authenticity and integrity.
+ * 
+ * @param canonicalString - Reconstructed canonical string
+ * @param signature - Base64 signature from X-Signature header
+ * @param secret - API key secret from KV storage
+ * @returns Promise resolving to true if signature is valid, false otherwise
  */
 async function verifyHMACSignature(
   canonicalString: string, 
@@ -449,7 +620,17 @@ async function verifyHMACSignature(
 }
 
 /**
- * Compute SHA256 hash of request body
+ * HMAC Utility: Compute SHA256 hash of request body
+ * 
+ * Calculates SHA256 hash of raw request body bytes for integrity verification.
+ * For GET/DELETE/HEAD requests, returns "UNSIGNED-PAYLOAD" per our policy.
+ * 
+ * @param request - HTTP request object
+ * @returns Promise resolving to hex SHA256 hash or "UNSIGNED-PAYLOAD"
+ * 
+ * @example
+ * const hash = await computeBodyHash(request);
+ * // Returns: "a665a45920422f9d417e4867efdc4fb8a04a1f3fff1fa07e998e86f7f7a27ae3" or "UNSIGNED-PAYLOAD"
  */
 async function computeBodyHash(request: Request): Promise<string> {
   // For GET/DELETE methods with no body, use UNSIGNED-PAYLOAD
@@ -473,7 +654,15 @@ async function computeBodyHash(request: Request): Promise<string> {
 }
 
 /**
- * Validate HMAC signed request
+ * HMAC Main Function: Complete HMAC validation pipeline
+ * 
+ * Orchestrates the full HMAC verification process from headers to validated client data.
+ * Combines all HMAC steps: extract headers → validate timestamp → check nonce → verify body → lookup secret → verify signature.
+ * 
+ * @param request - HTTP request with HMAC headers
+ * @param env - Worker environment with KV access
+ * @returns Promise resolving to validated client metadata (keyId, orgId, scopes)
+ * @throws Error if any validation step fails
  */
 async function validateHMAC(request: Request, env: Env): Promise<HMACPayload> {
   try {
@@ -543,7 +732,15 @@ async function validateHMAC(request: Request, env: Env): Promise<HMACPayload> {
 }
 
 /**
- * Create authenticated request with identity headers (JWT)
+ * JWT Identity: Create authenticated request with identity headers
+ * 
+ * Transforms JWT-authenticated request for backend by removing Authorization header
+ * and injecting standardized identity headers (X-Auth-Type, X-User-Id, X-Org-Id, X-Scopes).
+ * 
+ * @param originalRequest - Original client request
+ * @param targetUrl - Backend service URL
+ * @param payload - Validated JWT payload
+ * @returns New request with identity headers for backend consumption
  */
 function createAuthenticatedRequest(
   originalRequest: Request, 
@@ -581,7 +778,15 @@ function createAuthenticatedRequest(
 }
 
 /**
- * Create authenticated request with identity headers (HMAC)
+ * HMAC Identity: Create authenticated request with identity headers
+ * 
+ * Transforms HMAC-authenticated request for backend by removing HMAC headers
+ * and injecting standardized identity headers (X-Auth-Type, X-Client-Id, X-Org-Id, X-Scopes).
+ * 
+ * @param originalRequest - Original client request
+ * @param targetUrl - Backend service URL  
+ * @param payload - Validated HMAC payload
+ * @returns New request with identity headers for backend consumption
  */
 function createHMACAuthenticatedRequest(
   originalRequest: Request,
@@ -612,7 +817,17 @@ function createHMACAuthenticatedRequest(
 }
 
 /**
- * Main request handler
+ * Main Worker Handler: Dual authentication and request routing
+ * 
+ * Entry point for all requests. Handles both JWT and HMAC authentication on the same endpoints.
+ * Routes authenticated requests to backend services with injected identity headers.
+ * 
+ * Flow: Detect auth method → Validate credentials → Inject headers → Forward to backend
+ * 
+ * @param request - Incoming HTTP request
+ * @param env - Worker environment variables and bindings
+ * @param ctx - Execution context for background tasks
+ * @returns Promise resolving to HTTP response
  */
 export default {
   async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
