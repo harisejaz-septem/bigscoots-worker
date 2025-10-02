@@ -401,13 +401,19 @@ function isPublicRoute(pathname: string): boolean {
 function detectAuthMethod(request: Request): 'jwt' | 'hmac' | 'none' {
   const authHeader = request.headers.get('Authorization');
   const keyIdHeader = request.headers.get('X-Key-Id');
+  
+  console.log(`🔍 [AUTH-DETECT] Authorization header: ${authHeader ? 'present' : 'missing'}`);
+  console.log(`🔍 [AUTH-DETECT] X-Key-Id header: ${keyIdHeader ? keyIdHeader : 'missing'}`);
 
   if (authHeader && authHeader.startsWith('Bearer ')) {
+    console.log(`✅ [AUTH-DETECT] Detected JWT authentication`);
     return 'jwt';
   } else if (keyIdHeader) {
+    console.log(`✅ [AUTH-DETECT] Detected HMAC authentication with keyId: ${keyIdHeader}`);
     return 'hmac';
   }
   
+  console.log(`❌ [AUTH-DETECT] No authentication method detected`);
   return 'none';
 }
 
@@ -464,13 +470,18 @@ function cleanupExpiredNonces(): void {
  * // Returns: true (first use) or false (replay attack)
  */
 function checkAndStoreNonce(nonce: string): boolean {
+  console.log(`🔄 [NONCE] Checking nonce: ${nonce}`);
+  
   cleanupExpiredNonces();
+  console.log(`🔄 [NONCE] Active nonces in memory: ${usedNonces.size}`);
   
   if (usedNonces.has(nonce)) {
+    console.log(`❌ [NONCE] Replay attack detected - nonce already used: ${nonce}`);
     return false; // Nonce already used (replay attack)
   }
   
   usedNonces.set(nonce, Date.now());
+  console.log(`✅ [NONCE] Nonce stored successfully: ${nonce}`);
   return true;
 }
 
@@ -488,16 +499,26 @@ function checkAndStoreNonce(nonce: string): boolean {
  * // Returns: { keyId: "live_org_test123", timestamp: "1727712000", nonce: "uuid...", signature: "base64...", contentSHA256: "UNSIGNED-PAYLOAD" }
  */
 function extractHMACHeaders(request: Request): HMACHeaders | null {
+  console.log(`🔍 [HMAC-HEADERS] Starting header extraction`);
+  
   const keyId = request.headers.get('X-Key-Id');
   const timestamp = request.headers.get('X-Timestamp');
   const nonce = request.headers.get('X-Nonce');
   const signature = request.headers.get('X-Signature');
   const contentSHA256 = request.headers.get('X-Content-SHA256');
 
+  console.log(`🔍 [HMAC-HEADERS] X-Key-Id: ${keyId || 'MISSING'}`);
+  console.log(`🔍 [HMAC-HEADERS] X-Timestamp: ${timestamp || 'MISSING'}`);
+  console.log(`🔍 [HMAC-HEADERS] X-Nonce: ${nonce || 'MISSING'}`);
+  console.log(`🔍 [HMAC-HEADERS] X-Signature: ${signature ? 'present' : 'MISSING'}`);
+  console.log(`🔍 [HMAC-HEADERS] X-Content-SHA256: ${contentSHA256 || 'MISSING'}`);
+
   if (!keyId || !timestamp || !nonce || !signature || !contentSHA256) {
+    console.log(`❌ [HMAC-HEADERS] Missing required headers - validation failed`);
     return null;
   }
 
+  console.log(`✅ [HMAC-HEADERS] All required headers present`);
   return { keyId, timestamp, nonce, signature, contentSHA256 };
 }
 
@@ -518,12 +539,20 @@ function validateTimestamp(timestamp: string): boolean {
   const now = Math.floor(Date.now() / 1000);
   const requestTime = parseInt(timestamp, 10);
   
+  console.log(`⏰ [TIMESTAMP] Current time: ${now}, Request time: ${requestTime}`);
+  
   if (isNaN(requestTime)) {
+    console.log(`❌ [TIMESTAMP] Invalid timestamp format: ${timestamp}`);
     return false;
   }
   
   const diff = Math.abs(now - requestTime);
-  return diff <= CLOCK_SKEW_SECONDS;
+  console.log(`⏰ [TIMESTAMP] Time difference: ${diff}s (max allowed: ${CLOCK_SKEW_SECONDS}s)`);
+  
+  const isValid = diff <= CLOCK_SKEW_SECONDS;
+  console.log(`${isValid ? '✅' : '❌'} [TIMESTAMP] Timestamp validation: ${isValid ? 'PASSED' : 'FAILED'}`);
+  
+  return isValid;
 }
 
 /**
@@ -633,20 +662,29 @@ async function verifyHMACSignature(
  * // Returns: "a665a45920422f9d417e4867efdc4fb8a04a1f3fff1fa07e998e86f7f7a27ae3" or "UNSIGNED-PAYLOAD"
  */
 async function computeBodyHash(request: Request): Promise<string> {
+  console.log(`🔐 [BODY-HASH] Computing hash for ${request.method} request`);
+  
   // For GET/DELETE methods with no body, use UNSIGNED-PAYLOAD
   if (['GET', 'DELETE', 'HEAD'].includes(request.method.toUpperCase()) || !request.body) {
+    console.log(`🔐 [BODY-HASH] Method ${request.method} - using UNSIGNED-PAYLOAD`);
     return 'UNSIGNED-PAYLOAD';
   }
 
   try {
+    console.log(`🔐 [BODY-HASH] Method ${request.method} - computing SHA256 of body`);
     // Clone request to read body without consuming original
     const clonedRequest = request.clone();
     const bodyBytes = await clonedRequest.arrayBuffer();
+    console.log(`🔐 [BODY-HASH] Body size: ${bodyBytes.byteLength} bytes`);
+    
     const hashBuffer = await crypto.subtle.digest('SHA-256', bodyBytes);
     
     // Convert to hex string
     const hashArray = Array.from(new Uint8Array(hashBuffer));
-    return hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
+    const hash = hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
+    console.log(`🔐 [BODY-HASH] Computed hash: ${hash}`);
+    
+    return hash;
   } catch (error) {
     console.error('❌ [HMAC] Body hash computation failed:', error);
     throw new Error('Failed to compute body hash');
@@ -666,57 +704,92 @@ async function computeBodyHash(request: Request): Promise<string> {
  */
 async function validateHMAC(request: Request, env: Env): Promise<HMACPayload> {
   try {
+    console.log(`🚀 [HMAC-VALIDATE] Starting HMAC validation pipeline`);
+    
     // 1. Extract HMAC headers
+    console.log(`📋 [HMAC-VALIDATE] Step 1: Extracting HMAC headers`);
     const hmacHeaders = extractHMACHeaders(request);
     if (!hmacHeaders) {
       throw new Error('Missing required HMAC headers');
     }
+    console.log(`✅ [HMAC-VALIDATE] Step 1 complete: Headers extracted successfully`);
 
-    console.log(`🔍 [HMAC] Validating request from key: ${hmacHeaders.keyId}`);
+    console.log(`🔍 [HMAC-VALIDATE] Validating request from key: ${hmacHeaders.keyId}`);
 
     // 2. Validate timestamp freshness
+    console.log(`⏰ [HMAC-VALIDATE] Step 2: Validating timestamp freshness`);
     if (!validateTimestamp(hmacHeaders.timestamp)) {
       throw new Error('Request timestamp is outside acceptable window (±300s)');
     }
+    console.log(`✅ [HMAC-VALIDATE] Step 2 complete: Timestamp is fresh`);
 
     // 3. Check nonce uniqueness (replay protection)
+    console.log(`🔄 [HMAC-VALIDATE] Step 3: Checking nonce uniqueness`);
     if (!checkAndStoreNonce(hmacHeaders.nonce)) {
       throw new Error('Nonce has already been used (replay attack detected)');
     }
+    console.log(`✅ [HMAC-VALIDATE] Step 3 complete: Nonce is unique`);
 
     // 4. Verify body hash
+    console.log(`🔐 [HMAC-VALIDATE] Step 4: Computing and verifying body hash`);
     const computedBodyHash = await computeBodyHash(request);
+    console.log(`🔐 [HMAC-VALIDATE] Computed hash: ${computedBodyHash}`);
+    console.log(`🔐 [HMAC-VALIDATE] Expected hash: ${hmacHeaders.contentSHA256}`);
     if (computedBodyHash !== hmacHeaders.contentSHA256) {
       throw new Error(`Body hash mismatch. Expected: ${hmacHeaders.contentSHA256}, Got: ${computedBodyHash}`);
     }
+    console.log(`✅ [HMAC-VALIDATE] Step 4 complete: Body hash matches`);
 
     // 5. Fetch API key metadata from KV
+    console.log(`🗄️ [HMAC-VALIDATE] Step 5: Fetching API key from KV storage`);
+    console.log(`🗄️ [HMAC-VALIDATE] Looking up key: api_key:${hmacHeaders.keyId}`);
+    console.log(`🗄️ [HMAC-VALIDATE] KV namespace available: ${env.KV ? 'YES' : 'NO'}`);
+    
     const keyData = await env.KV.get(`api_key:${hmacHeaders.keyId}`, { type: 'json' }) as APIKeyMetadata | null;
+    
+    console.log(`🗄️ [HMAC-VALIDATE] KV lookup result: ${keyData ? 'FOUND' : 'NOT FOUND'}`);
+    if (keyData) {
+      console.log(`🗄️ [HMAC-VALIDATE] Key data orgId: ${keyData.orgId}`);
+      console.log(`🗄️ [HMAC-VALIDATE] Key data scopes: ${JSON.stringify(keyData.scopes)}`);
+      console.log(`🗄️ [HMAC-VALIDATE] Secret present: ${keyData.secret ? 'YES' : 'NO'}`);
+    }
+    
     if (!keyData) {
       throw new Error(`API key not found: ${hmacHeaders.keyId}`);
     }
+    console.log(`✅ [HMAC-VALIDATE] Step 5 complete: API key found in KV`);
 
     // 6. Build canonical string
+    console.log(`📝 [HMAC-VALIDATE] Step 6: Building canonical string`);
     const canonicalString = await buildCanonicalString(
       request, 
       hmacHeaders.timestamp, 
       hmacHeaders.nonce, 
       hmacHeaders.contentSHA256
     );
-
+    console.log(`📝 [HMAC-VALIDATE] Canonical string built (${canonicalString.length} chars)`);
     console.log(`🔐 [HMAC] Canonical string:\n${canonicalString}`);
+    console.log(`✅ [HMAC-VALIDATE] Step 6 complete: Canonical string ready`);
 
     // 7. Verify HMAC signature
+    console.log(`🔏 [HMAC-VALIDATE] Step 7: Verifying HMAC signature`);
+    console.log(`🔏 [HMAC-VALIDATE] Received signature: ${hmacHeaders.signature}`);
+    console.log(`🔏 [HMAC-VALIDATE] Using secret length: ${keyData.secret.length} chars`);
+    
     const isValidSignature = await verifyHMACSignature(
       canonicalString, 
       hmacHeaders.signature, 
       keyData.secret
     );
+    
+    console.log(`🔏 [HMAC-VALIDATE] Signature verification result: ${isValidSignature ? 'VALID' : 'INVALID'}`);
 
     if (!isValidSignature) {
       throw new Error('HMAC signature verification failed');
     }
+    console.log(`✅ [HMAC-VALIDATE] Step 7 complete: Signature verified`);
 
+    console.log(`🎉 [HMAC-VALIDATE] All steps complete - HMAC validation successful`);
     console.log(`✅ [HMAC] Request validated for key: ${hmacHeaders.keyId}, org: ${keyData.orgId}`);
 
     return {
@@ -909,9 +982,14 @@ export default {
           return response;
 
         } else if (authMethod === 'hmac') {
+          console.log("🚀 [AUTH] Starting HMAC authentication process");
+          console.log(`🔑 [AUTH] Request URL: ${request.url}`);
+          console.log(`🔑 [AUTH] Request method: ${request.method}`);
+          
           // Validate HMAC signed request
           const payload = await validateHMAC(request, env);
           console.log("✅ [AUTH] HMAC authentication successful");
+          console.log(`✅ [AUTH] Authenticated client: ${payload.keyId} (org: ${payload.orgId})`);
 
           // Create authenticated request for downstream services
           const externalUrl = "https://kfs-p2-be.ss1.septemsystems.com/api/v1/app/hello";
@@ -954,24 +1032,34 @@ export default {
     } catch (error) {
       console.error("❌ [ERROR] Request processing failed:", error);
       
+      console.error("❌ [ERROR] Request processing failed:", error);
+      
       // Handle authentication errors
       if (error instanceof Error) {
+        console.error(`❌ [ERROR] Error type: ${error.constructor.name}`);
+        console.error(`❌ [ERROR] Error message: ${error.message}`);
+        
         // JWT errors
         if (error.message.includes('expired')) {
+          console.error(`❌ [ERROR] JWT token expired`);
           return createErrorResponse('token_expired', error.message, 401);
         }
         if (error.message.includes('Invalid')) {
+          console.error(`❌ [ERROR] Invalid JWT token`);
           return createErrorResponse('invalid_token', error.message, 401);
         }
         
         // HMAC errors
         if (error.message.includes('timestamp') || error.message.includes('replay')) {
+          console.error(`❌ [ERROR] HMAC timestamp/replay error`);
           return createErrorResponse('invalid_request', error.message, 401);
         }
         if (error.message.includes('HMAC') || error.message.includes('signature')) {
+          console.error(`❌ [ERROR] HMAC signature verification failed`);
           return createErrorResponse('invalid_signature', error.message, 401);
         }
         if (error.message.includes('API key not found')) {
+          console.error(`❌ [ERROR] API key not found in KV storage`);
           return createErrorResponse('invalid_key', error.message, 401);
         }
       }
