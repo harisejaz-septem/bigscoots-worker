@@ -6,6 +6,12 @@ interface Env {
   AUTH0_AUDIENCE: string;
   JWKS_URL: string;
   KV: KVNamespace;
+  NONCE_TRACKER: DurableObjectNamespace;
+}
+
+interface NonceReplayGuardStub {
+  checkAndStore(nonce: string, timestamp: number): Promise<boolean>;
+  getStats(): Promise<{ activeNonces: number; oldestTimestamp: number | null; newestTimestamp: number | null }>;
 }
 
 interface JWKSKey {
@@ -79,9 +85,7 @@ const CLOCK_SKEW_SECONDS = 300; // ±5 minutes
 const SIGNED_HEADERS = ['host', 'content-type']; // Headers included in signature
 const NONCE_TTL = 300000; // 5 minutes in milliseconds
 
-// In-memory nonce tracking (per worker instance)
-// NOTE: Move to Durable Objects for global nonce tracking
-const usedNonces = new Map<string, number>(); // nonce -> timestamp
+// Nonce tracking now handled by Durable Objects (NonceReplayGuard class)
 
 // Global JWKS cache (simple in-memory for now)
 let jwksCache: JWKS | null = null;
@@ -439,54 +443,12 @@ function extractJWTToken(request: Request): string | null {
   return authHeader.slice(7); // Remove 'Bearer ' prefix
 }
 
-/**
- * HMAC Utility: Clean expired nonces from memory
- * 
- * Removes nonces older than 5 minutes from in-memory cache to prevent memory leaks.
- * Called automatically before each nonce check to maintain cache size.
- * 
- * Note: In production, this should be replaced with Durable Objects for global tracking.
- */
-function cleanupExpiredNonces(): void {
-  const now = Date.now();
-  for (const [nonce, timestamp] of usedNonces.entries()) {
-    if (now - timestamp > NONCE_TTL) {
-      usedNonces.delete(nonce);
-    }
-  }
-}
+// cleanupExpiredNonces function removed - now handled automatically by Durable Objects
+
+// checkAndStoreNonce function removed - now handled by NonceReplayGuard Durable Object
 
 /**
- * HMAC Step 1: Replay attack prevention via nonce tracking
- * 
- * Ensures each nonce (UUID) is used only once within the 5-minute window.
- * Prevents replay attacks where attackers resend valid signed requests.
- * 
- * @param nonce - Unique UUID from X-Nonce header
- * @returns true if nonce is new (request allowed), false if already used (replay attack)
- * 
- * @example
- * const isValid = checkAndStoreNonce("550e8400-e29b-41d4-a716-446655440000");
- * // Returns: true (first use) or false (replay attack)
- */
-function checkAndStoreNonce(nonce: string): boolean {
-  console.log(`🔄 [NONCE] Checking nonce: ${nonce}`);
-  
-  cleanupExpiredNonces();
-  console.log(`🔄 [NONCE] Active nonces in memory: ${usedNonces.size}`);
-  
-  if (usedNonces.has(nonce)) {
-    console.log(`❌ [NONCE] Replay attack detected - nonce already used: ${nonce}`);
-    return false; // Nonce already used (replay attack)
-  }
-  
-  usedNonces.set(nonce, Date.now());
-  console.log(`✅ [NONCE] Nonce stored successfully: ${nonce}`);
-  return true;
-}
-
-/**
- * HMAC Step 2: Extract required HMAC headers from request
+ * HMAC Step 1: Extract required HMAC headers from request
  * 
  * Validates presence of all 5 required HMAC headers for signature verification.
  * Returns null if any header is missing, preventing incomplete validation attempts.
@@ -523,7 +485,7 @@ function extractHMACHeaders(request: Request): HMACHeaders | null {
 }
 
 /**
- * HMAC Step 3: Validate request timestamp freshness
+ * HMAC Step 2: Validate request timestamp freshness
  * 
  * Ensures request was signed within ±300 seconds (5 minutes) of current time.
  * Prevents old signed requests from being replayed hours or days later.
@@ -556,7 +518,7 @@ function validateTimestamp(timestamp: string): boolean {
 }
 
 /**
- * HMAC Step 4: Build canonical string for signature verification
+ * HMAC Step 3: Build canonical string for signature verification
  * 
  * Constructs the exact string that was signed by the client, following strict format:
  * METHOD\nPATH\nQUERY\nSIGNED-HEADERS\nTIMESTAMP\nNONCE\nBODY-HASH
@@ -610,7 +572,7 @@ async function buildCanonicalString(
 }
 
 /**
- * HMAC Step 5: Verify HMAC-SHA256 signature using WebCrypto
+ * HMAC Step 4: Verify HMAC-SHA256 signature using WebCrypto
  * 
  * Cryptographically verifies that the signature was created using the secret key.
  * Uses HMAC-SHA256 algorithm to ensure request authenticity and integrity.
@@ -695,10 +657,12 @@ async function computeBodyHash(request: Request): Promise<string> {
  * HMAC Main Function: Complete HMAC validation pipeline
  * 
  * Orchestrates the full HMAC verification process from headers to validated client data.
- * Combines all HMAC steps: extract headers → validate timestamp → check nonce → verify body → lookup secret → verify signature.
+ * Combines all HMAC steps: extract headers → validate timestamp → check nonce (via Durable Objects) → verify body → lookup secret → verify signature.
+ * 
+ * Uses Durable Objects for global nonce replay protection across all worker instances.
  * 
  * @param request - HTTP request with HMAC headers
- * @param env - Worker environment with KV access
+ * @param env - Worker environment with KV access and Durable Object bindings
  * @returns Promise resolving to validated client metadata (keyId, orgId, scopes)
  * @throws Error if any validation step fails
  */
@@ -723,12 +687,16 @@ async function validateHMAC(request: Request, env: Env): Promise<HMACPayload> {
     }
     console.log(`✅ [HMAC-VALIDATE] Step 2 complete: Timestamp is fresh`);
 
-    // 3. Check nonce uniqueness (replay protection)
-    console.log(`🔄 [HMAC-VALIDATE] Step 3: Checking nonce uniqueness`);
-    if (!checkAndStoreNonce(hmacHeaders.nonce)) {
+    // 3. Check nonce uniqueness (replay protection) using Durable Object
+    console.log(`🔄 [HMAC-VALIDATE] Step 3: Checking nonce uniqueness via Durable Object`);
+    const nonceTrackerId = env.NONCE_TRACKER.idFromName(`nonce-${hmacHeaders.keyId}`);
+    const nonceTracker = env.NONCE_TRACKER.get(nonceTrackerId) as unknown as NonceReplayGuardStub;
+    const isNonceUnique = await nonceTracker.checkAndStore(hmacHeaders.nonce, parseInt(hmacHeaders.timestamp, 10));
+    
+    if (!isNonceUnique) {
       throw new Error('Nonce has already been used (replay attack detected)');
     }
-    console.log(`✅ [HMAC-VALIDATE] Step 3 complete: Nonce is unique`);
+    console.log(`✅ [HMAC-VALIDATE] Step 3 complete: Nonce is unique and stored in DO`);
 
     // 4. Verify body hash
     console.log(`🔐 [HMAC-VALIDATE] Step 4: Computing and verifying body hash`);
@@ -887,6 +855,106 @@ function createHMACAuthenticatedRequest(
     headers: newHeaders,
     body: originalRequest.body,
   });
+}
+
+/**
+ * Durable Object: Nonce Replay Guard for HMAC Authentication
+ * 
+ * Prevents replay attacks by tracking used nonces per API key.
+ * Each API key gets its own DO instance for isolated, scalable nonce tracking.
+ * Automatically cleans up expired nonces to prevent memory bloat.
+ */
+export class NonceReplayGuard {
+  private nonces: Map<string, number>;
+  private cleanupInterval: number | null;
+
+  constructor(private state: DurableObjectState, private env: Env) {
+    this.nonces = new Map();
+    this.cleanupInterval = null;
+    
+    // Start cleanup timer when DO is created
+    this.startCleanupTimer();
+  }
+
+  /**
+   * Check if nonce is unique and store it if valid
+   * 
+   * @param nonce - UUID nonce from request
+   * @param timestamp - Request timestamp for expiration tracking
+   * @returns true if nonce is unique (allowed), false if replay detected
+   */
+  async checkAndStore(nonce: string, timestamp: number): Promise<boolean> {
+    const now = Date.now();
+    const requestTime = timestamp * 1000; // Convert to milliseconds
+    
+    console.log(`🔄 [NONCE-DO] Checking nonce for timestamp ${timestamp}, current active: ${this.nonces.size}`);
+    
+    // Check if nonce already exists (replay attack)
+    if (this.nonces.has(nonce)) {
+      console.log(`❌ [NONCE-DO] Replay attack detected - nonce already used: ${nonce.substring(0, 8)}...`);
+      return false;
+    }
+    
+    // Store the nonce with its timestamp
+    this.nonces.set(nonce, requestTime);
+    console.log(`✅ [NONCE-DO] Nonce stored successfully, total active: ${this.nonces.size}`);
+    
+    return true;
+  }
+
+  /**
+   * Get statistics about current nonce storage (for monitoring)
+   */
+  async getStats(): Promise<{ activeNonces: number; oldestTimestamp: number | null; newestTimestamp: number | null }> {
+    const timestamps = Array.from(this.nonces.values());
+    return {
+      activeNonces: this.nonces.size,
+      oldestTimestamp: timestamps.length > 0 ? Math.min(...timestamps) : null,
+      newestTimestamp: timestamps.length > 0 ? Math.max(...timestamps) : null
+    };
+  }
+
+  /**
+   * Start automatic cleanup timer to remove expired nonces
+   */
+  private startCleanupTimer(): void {
+    // Clean up every 2 minutes
+    this.cleanupInterval = setInterval(() => {
+      this.cleanup();
+    }, 120000) as any; // 2 minutes
+  }
+
+  /**
+   * Remove expired nonces from memory
+   * Called automatically every 2 minutes to prevent memory bloat
+   */
+  private cleanup(): void {
+    const now = Date.now();
+    const initialSize = this.nonces.size;
+    let removedCount = 0;
+
+    for (const [nonce, timestamp] of this.nonces.entries()) {
+      // Remove nonces older than 5 minutes (NONCE_TTL)
+      if (now - timestamp > NONCE_TTL) {
+        this.nonces.delete(nonce);
+        removedCount++;
+      }
+    }
+
+    if (removedCount > 0) {
+      console.log(`🧹 [NONCE-DO] Cleanup completed: removed ${removedCount} expired nonces (${initialSize} → ${this.nonces.size})`);
+    }
+  }
+
+  /**
+   * Cleanup resources when DO is being destroyed
+   */
+  async alarm(): Promise<void> {
+    if (this.cleanupInterval) {
+      clearInterval(this.cleanupInterval);
+      this.cleanupInterval = null;
+    }
+  }
 }
 
 /**

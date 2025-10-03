@@ -23,6 +23,22 @@
 			"preview_id": "3a0ddac0a07b4f57844b92c3e855d6cf"
 		}
 	],
+	"durable_objects": {
+		"bindings": [
+			{
+				"name": "NONCE_TRACKER",
+				"class_name": "NonceReplayGuard"
+			}
+		]
+	},
+	"migrations": [
+		{
+			"tag": "v1",
+			"new_classes": [
+				"NonceReplayGuard"
+			]
+		}
+	],
 	"vars": {
 		"AUTH0_ISSUER": "https://dev-d12fwlrflc607aca.us.auth0.com/",
 		"AUTH0_AUDIENCE": "https://dev-d12fwlrflc607aca.us.auth0.com/api/v2/",
