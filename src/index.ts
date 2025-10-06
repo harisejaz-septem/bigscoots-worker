@@ -1,6 +1,8 @@
 // bigscoots-v2-gateway-test
 // JWT Authentication Gateway for BigScoots API
 
+import { DurableObject } from "cloudflare:workers";
+
 interface Env {
   AUTH0_ISSUER: string;
   AUTH0_AUDIENCE: string;
@@ -864,11 +866,12 @@ function createHMACAuthenticatedRequest(
  * Each API key gets its own DO instance for isolated, scalable nonce tracking.
  * Automatically cleans up expired nonces to prevent memory bloat.
  */
-export class NonceReplayGuard {
+export class NonceReplayGuard extends DurableObject<Env> {
   private nonces: Map<string, number>;
   private cleanupInterval: number | null;
 
-  constructor(private state: DurableObjectState, private env: Env) {
+  constructor(state: DurableObjectState, env: Env) {
+    super(state, env);
     this.nonces = new Map();
     this.cleanupInterval = null;
     
