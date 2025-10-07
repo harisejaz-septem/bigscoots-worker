@@ -42,6 +42,8 @@
 	"vars": {
 		"AUTH0_ISSUER": "https://dev-d12fwlrflc607aca.us.auth0.com/",
 		"AUTH0_AUDIENCE": "https://dev-d12fwlrflc607aca.us.auth0.com/api/v2/",
-		"JWKS_URL": "https://dev-d12fwlrflc607aca.us.auth0.com/.well-known/jwks.json"
+		"JWKS_URL": "https://dev-d12fwlrflc607aca.us.auth0.com/.well-known/jwks.json",
+		"USER_SERVICE_URL": "https://v2-user.bigscoots.dev",
+		"SITE_SERVICE_URL": "https://v2-sites.bigscoots.dev"
 	}
 }

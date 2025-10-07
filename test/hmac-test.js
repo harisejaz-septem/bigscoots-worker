@@ -16,9 +16,8 @@ class HMACTester {
     const signedHeaders = [];
     const headerNames = ['host', 'content-type'].sort();
     for (const name of headerNames) {
-      if (headers[name]) {
-        signedHeaders.push(`${name.toLowerCase()}:${headers[name]}`);
-      }
+      const headerValue = headers[name] || '';  // Always include header, use empty string if missing
+      signedHeaders.push(`${name.toLowerCase()}:${headerValue}`);
     }
 
     const canonical = [
@@ -123,27 +122,44 @@ async function runTests() {
   console.log('🧪 Starting HMAC Tests...\n');
 
   try {
-    // Test 1: GET request
-    console.log('Test 1: GET Request');
+    // Test 1: Built-in test route (no auth required)
+    console.log('Test 1: Built-in Test Route (No Auth)');
     await tester.makeRequest('GET', '/hi');
 
-    // Test 2: POST request with body
-    console.log('\nTest 2: POST Request with Body');
+    // Test 2: Public route (no auth required)
+    console.log('\nTest 2: Public Route - Sites List');
+    await tester.makeRequest('GET', '/sites');
+
+    // Test 3: Protected route - User Management (requires auth)
+    console.log('\nTest 3: Protected Route - User Management');
+    await tester.makeRequest('GET', '/user-mgmt/profile');
+
+    // Test 4: Protected route - Get Site Details (requires auth)
+    console.log('\nTest 4: Protected Route - Get Site Details');
+    await tester.makeRequest('GET', '/sites/service-123/site-456');
+
+    // Test 5: POST request - Create New Site (requires auth)
+    console.log('\nTest 5: POST Request - Create New Site');
     await tester.makeRequest(
       'POST', 
-      '/api/test', 
-      'param1=value1&param2=value2',
-      JSON.stringify({ message: 'Hello HMAC' })
+      '/sites/service-123', 
+      '',
+      JSON.stringify({ domain: 'example.com', plan: 'basic' })
     );
 
-    // Test 3: Invalid signature (wrong secret)
-    console.log('\nTest 3: Invalid Signature Test');
+    // Test 6: Invalid route (should return 404)
+    console.log('\nTest 6: Invalid Route Test');
+    await tester.makeRequest('GET', '/invalid/route');
+
+    // Test 7: Invalid signature (wrong secret)
+    console.log('\nTest 7: Invalid Signature Test');
     const badTester = new HMACTester(
       'https://v2-cloudflare.bigscoots.dev',
       'live_org_test123',
       'wrong-secret'
     );
-    await badTester.makeRequest('GET', '/hi');
+    console.log('🔍 [TEST] Using wrong secret: "wrong-secret" vs stored: "base64randomsecret"');
+    await badTester.makeRequest('GET', '/sites/service-123/site-456');
 
   } catch (error) {
     console.error('Test failed:', error);

@@ -9,6 +9,8 @@ interface Env {
   JWKS_URL: string;
   KV: KVNamespace;
   NONCE_TRACKER: DurableObjectNamespace;
+  USER_SERVICE_URL: string;
+  SITE_SERVICE_URL: string;
 }
 
 interface NonceReplayGuardStub {
@@ -80,7 +82,29 @@ interface HMACPayload {
 }
 
 // Public routes that bypass authentication
-const PUBLIC_ROUTES: string[] = [];
+const PUBLIC_ROUTES: string[] = [
+  '/user-mgmt/auth/login',
+  '/user-mgmt/auth/refresh', 
+  '/user-mgmt/auth/verify-oob-code',
+  '/user-mgmt/auth/social-login',
+  '/authentication/get-token',
+  '/service',
+  '/sites'
+];
+
+// Service routing configuration
+const ROUTE_CONFIG = [
+  {
+    prefixes: ['/user-mgmt/'],
+    serviceUrl: 'USER_SERVICE_URL',
+    serviceName: 'User Management'
+  },
+  {
+    prefixes: ['/sites/', '/authentication/', '/dashboard/', '/management/', '/service/', '/plans/'],
+    serviceUrl: 'SITE_SERVICE_URL', 
+    serviceName: 'Site Management'
+  }
+] as const;
 
 // HMAC Configuration
 const CLOCK_SKEW_SECONDS = 300; // ±5 minutes
@@ -388,7 +412,14 @@ function createErrorResponse(error: string, description: string, status: number)
  * // Returns: true (if "/health" is in PUBLIC_ROUTES array)
  */
 function isPublicRoute(pathname: string): boolean {
-  return PUBLIC_ROUTES.some(route => pathname.startsWith(route));
+  return PUBLIC_ROUTES.some(route => {
+    // Exact match for root endpoints that shouldn't match sub-paths
+    if (route === '/sites' || route === '/service') {
+      return pathname === route;
+    }
+    // Prefix match for auth endpoints that should match sub-paths
+    return pathname.startsWith(route);
+  });
 }
 
 /**
@@ -443,6 +474,89 @@ function extractJWTToken(request: Request): string | null {
   }
   
   return authHeader.slice(7); // Remove 'Bearer ' prefix
+}
+
+/**
+ * Routing Utility: Determine target service for request path
+ * 
+ * Matches request path against configured route prefixes to determine which backend service
+ * should handle the request. Supports multiple prefixes per service.
+ * 
+ * @param pathname - Request path from URL (e.g., "/sites/123", "/user-mgmt/profile")
+ * @returns Route configuration object or null if no match found
+ * 
+ * @example
+ * const route = getRouteForPath("/sites/abc-123");
+ * // Returns: { prefixes: ["/sites/", ...], serviceUrl: "SITE_SERVICE_URL", serviceName: "Site Management" }
+ */
+function getRouteForPath(pathname: string): typeof ROUTE_CONFIG[number] | null {
+  // Normalize path - ensure it ends with / for prefix matching
+  const normalizedPath = pathname.endsWith('/') ? pathname : pathname + '/';
+  
+  for (const route of ROUTE_CONFIG) {
+    for (const prefix of route.prefixes) {
+      if (normalizedPath.startsWith(prefix)) {
+        return route;
+      }
+    }
+  }
+  
+  return null;
+}
+
+/**
+ * Routing Utility: Create request for backend service
+ * 
+ * Creates a new request object targeting the specified backend service while preserving
+ * the original path, query parameters, headers, and body. Adds identity headers from authentication.
+ * For JWT requests, keeps the Authorization header so backend can decode the token.
+ * For HMAC requests, removes all authentication headers.
+ * 
+ * @param originalRequest - Original client request
+ * @param serviceUrl - Backend service base URL
+ * @param pathname - Request path to preserve
+ * @param identityHeaders - Headers to add from authentication (X-Auth-Type, X-User-Id, etc.)
+ * @returns New request object for backend service
+ */
+function createServiceRequest(
+  originalRequest: Request, 
+  serviceUrl: string, 
+  pathname: string,
+  identityHeaders: Record<string, string>
+): Request {
+  const url = new URL(originalRequest.url);
+  const targetUrl = `${serviceUrl}${pathname}${url.search}`;
+  
+  // Copy all original headers
+  const newHeaders = new Headers(originalRequest.headers);
+  
+  // Remove HMAC authentication headers (they shouldn't reach backend services)
+  newHeaders.delete('X-Key-Id');      // Remove HMAC headers
+  newHeaders.delete('X-Timestamp');
+  newHeaders.delete('X-Nonce');
+  newHeaders.delete('X-Signature');
+  newHeaders.delete('X-Content-SHA256');
+  
+  // Keep Authorization header for JWT requests, remove for HMAC requests
+  if (identityHeaders['X-Auth-Type'] === 'hmac') {
+    newHeaders.delete('Authorization'); // Remove for HMAC (no JWT to pass)
+  }
+  // For JWT requests, keep Authorization header so backend can decode token
+  
+  // Add identity headers from authentication
+  Object.entries(identityHeaders).forEach(([key, value]) => {
+    newHeaders.set(key, value);
+  });
+  
+  // Update Host header to match target service
+  const targetHost = new URL(serviceUrl).host;
+  newHeaders.set('Host', targetHost);
+  
+  return new Request(targetUrl, {
+    method: originalRequest.method,
+    headers: newHeaders,
+    body: originalRequest.body,
+  });
 }
 
 // cleanupExpiredNonces function removed - now handled automatically by Durable Objects
@@ -774,90 +888,7 @@ async function validateHMAC(request: Request, env: Env): Promise<HMACPayload> {
   }
 }
 
-/**
- * JWT Identity: Create authenticated request with identity headers
- * 
- * Transforms JWT-authenticated request for backend by removing Authorization header
- * and injecting standardized identity headers (X-Auth-Type, X-User-Id, X-Org-Id, X-Scopes).
- * 
- * @param originalRequest - Original client request
- * @param targetUrl - Backend service URL
- * @param payload - Validated JWT payload
- * @returns New request with identity headers for backend consumption
- */
-function createAuthenticatedRequest(
-  originalRequest: Request, 
-  targetUrl: string, 
-  payload: JWTPayload
-): Request {
-  // Parse scopes from the standard scope field
-  const scopes = parseScopes(payload.scope);
-
-  // Create new headers with identity information
-  const newHeaders = new Headers(originalRequest.headers);
-  
-  // Remove original auth header and add identity headers
-  newHeaders.delete('Authorization');
-  newHeaders.set('X-Auth-Type', 'jwt');
-  newHeaders.set('X-User-Id', payload.sub);
-  newHeaders.set('X-Client-Id', payload.sub);
-  newHeaders.set('X-Org-Id', 'null'); // Normal users don't have org_id
-  newHeaders.set('X-Scopes', JSON.stringify(scopes));
-  
-  // Add custom claims if present
-  if (payload["https://v2-bigscoots.com/role"]) {
-    newHeaders.set('X-Role', payload["https://v2-bigscoots.com/role"]);
-  }
-  
-  if (payload["https://v2-bigscoots.com/email"]) {
-    newHeaders.set('X-Email', payload["https://v2-bigscoots.com/email"]);
-  }
-
-  return new Request(targetUrl, {
-    method: originalRequest.method,
-    headers: newHeaders,
-    body: originalRequest.body,
-  });
-}
-
-/**
- * HMAC Identity: Create authenticated request with identity headers
- * 
- * Transforms HMAC-authenticated request for backend by removing HMAC headers
- * and injecting standardized identity headers (X-Auth-Type, X-Client-Id, X-Org-Id, X-Scopes).
- * 
- * @param originalRequest - Original client request
- * @param targetUrl - Backend service URL  
- * @param payload - Validated HMAC payload
- * @returns New request with identity headers for backend consumption
- */
-function createHMACAuthenticatedRequest(
-  originalRequest: Request,
-  targetUrl: string,
-  payload: HMACPayload
-): Request {
-  // Create new headers with identity information
-  const newHeaders = new Headers(originalRequest.headers);
-  
-  // Remove HMAC headers and add identity headers
-  newHeaders.delete('X-Key-Id');
-  newHeaders.delete('X-Timestamp');
-  newHeaders.delete('X-Nonce');
-  newHeaders.delete('X-Signature');
-  newHeaders.delete('X-Content-SHA256');
-  
-  // Add identity headers
-  newHeaders.set('X-Auth-Type', 'hmac');
-  newHeaders.set('X-Client-Id', payload.keyId);
-  newHeaders.set('X-Org-Id', payload.orgId);
-  newHeaders.set('X-Scopes', JSON.stringify(payload.scopes));
-
-  return new Request(targetUrl, {
-    method: originalRequest.method,
-    headers: newHeaders,
-    body: originalRequest.body,
-  });
-}
+// Old authentication request functions removed - now using createServiceRequest with routing
 
 /**
  * Durable Object: Nonce Replay Guard for HMAC Authentication
@@ -1008,8 +1039,24 @@ export default {
       // Check if route is public (bypass auth)
       if (isPublicRoute(parsedUrl.pathname)) {
         console.log("🔓 [AUTH] Public route - bypassing authentication");
-        // TODO: Route to appropriate service when microservices are ready
-        // For now, continue to external API
+        
+        // Route public requests to appropriate service
+        const route = getRouteForPath(parsedUrl.pathname);
+        if (!route) {
+          console.log(`❌ [ROUTING] No route found for path: ${parsedUrl.pathname}`);
+          return createErrorResponse('not_found', 'Route not found', 404);
+        }
+        
+        const serviceUrl = env[route.serviceUrl as keyof Env] as string;
+        console.log(`🌐 [ROUTING] Public route to ${route.serviceName}: ${serviceUrl}`);
+        
+        // Create request without identity headers for public routes
+        const serviceRequest = createServiceRequest(request, serviceUrl, parsedUrl.pathname, {});
+        const response = await fetch(serviceRequest);
+        
+        console.log(`📤 [${route.serviceName.toUpperCase()}] ${serviceUrl}${parsedUrl.pathname} -> ${response.status} @ ${new Date().toISOString()}`);
+        return response;
+        
 	  } else {
         // Authentication required for all other routes
         const authMethod = detectAuthMethod(request);
@@ -1038,18 +1085,39 @@ export default {
           const payload = await validateJWT(token, env);
           console.log("✅ [AUTH] JWT authentication successful");
 
-          // Create authenticated request for downstream services
-          const externalUrl = "https://kfs-p2-be.ss1.septemsystems.com/api/v1/app/hello";
-          const authenticatedRequest = createAuthenticatedRequest(request, externalUrl, payload);
+          // Determine target service for this route
+          const route = getRouteForPath(parsedUrl.pathname);
+          if (!route) {
+            console.log(`❌ [ROUTING] No route found for authenticated path: ${parsedUrl.pathname}`);
+            return createErrorResponse('not_found', 'Route not found', 404);
+          }
           
-          // Forward the request
-          console.log("🌐 [ROUTING] Forwarding authenticated request to external API");
-          const response = await fetch(authenticatedRequest);
+          const serviceUrl = env[route.serviceUrl as keyof Env] as string;
+          console.log(`🌐 [ROUTING] JWT authenticated request to ${route.serviceName}: ${serviceUrl}`);
           
-          console.log(
-            `📤 [EXTERNAL] ${externalUrl} -> ${response.status} @ ${new Date().toISOString()}`
-          );
+          // Create identity headers for JWT authentication
+          const scopes = parseScopes(payload.scope);
+          const identityHeaders: Record<string, string> = {
+            'X-Auth-Type': 'jwt',
+            'X-User-Id': payload.sub,
+            'X-Client-Id': payload.sub,
+            'X-Org-Id': 'null', // Normal users don't have org_id
+            'X-Scopes': JSON.stringify(scopes)
+          };
           
+          // Add custom claims if present
+          if (payload["https://v2-bigscoots.com/role"]) {
+            identityHeaders['X-Role'] = payload["https://v2-bigscoots.com/role"];
+          }
+          if (payload["https://v2-bigscoots.com/email"]) {
+            identityHeaders['X-Email'] = payload["https://v2-bigscoots.com/email"];
+          }
+          
+          // Create and forward authenticated request
+          const serviceRequest = createServiceRequest(request, serviceUrl, parsedUrl.pathname, identityHeaders);
+          const response = await fetch(serviceRequest);
+          
+          console.log(`📤 [${route.serviceName.toUpperCase()}] ${serviceUrl}${parsedUrl.pathname} -> ${response.status} @ ${new Date().toISOString()}`);
           return response;
 
         } else if (authMethod === 'hmac') {
@@ -1062,43 +1130,35 @@ export default {
           console.log("✅ [AUTH] HMAC authentication successful");
           console.log(`✅ [AUTH] Authenticated client: ${payload.keyId} (org: ${payload.orgId})`);
 
-          // Create authenticated request for downstream services
-          const externalUrl = "https://kfs-p2-be.ss1.septemsystems.com/api/v1/app/hello";
-          const authenticatedRequest = createHMACAuthenticatedRequest(request, externalUrl, payload);
+          // Determine target service for this route
+          const route = getRouteForPath(parsedUrl.pathname);
+          if (!route) {
+            console.log(`❌ [ROUTING] No route found for authenticated path: ${parsedUrl.pathname}`);
+            return createErrorResponse('not_found', 'Route not found', 404);
+          }
           
-          // Forward the request
-          console.log("🌐 [ROUTING] Forwarding HMAC authenticated request to external API");
-          const response = await fetch(authenticatedRequest);
+          const serviceUrl = env[route.serviceUrl as keyof Env] as string;
+          console.log(`🌐 [ROUTING] HMAC authenticated request to ${route.serviceName}: ${serviceUrl}`);
           
-          console.log(
-            `📤 [EXTERNAL] ${externalUrl} -> ${response.status} @ ${new Date().toISOString()}`
-          );
+          // Create identity headers for HMAC authentication
+          const identityHeaders = {
+            'X-Auth-Type': 'hmac',
+            'X-Client-Id': payload.keyId,
+            'X-Org-Id': payload.orgId,
+            'X-Scopes': JSON.stringify(payload.scopes)
+          };
           
+          // Create and forward authenticated request
+          const serviceRequest = createServiceRequest(request, serviceUrl, parsedUrl.pathname, identityHeaders);
+          const response = await fetch(serviceRequest);
+          
+          console.log(`📤 [${route.serviceName.toUpperCase()}] ${serviceUrl}${parsedUrl.pathname} -> ${response.status} @ ${new Date().toISOString()}`);
           return response;
         }
       }
 
-      // Default route to external API (requires auth)
-      console.log("🌐 [ROUTING] Forwarding to external API (default route)");
-      
-      const externalUrl = "https://kfs-p2-be.ss1.septemsystems.com/api/v1/app/hello";
-      const externalRequest = new Request(externalUrl, {
-        method: request.method,
-        headers: request.headers,
-        body: request.body,
-      });
-      
-      const response = await fetch(externalRequest);
-      
-      console.log(
-        `📤 [EXTERNAL] ${externalUrl} -> ${response.status} @ ${new Date().toISOString()}`
-      );
-      
-	  console.log(
-		`🔵 [RESPONSE] ${parsedUrl.pathname} -> ${response.status} @ ${new Date().toISOString()}`
-	  );
-  
-	  return response;
+      // Fallback for unhandled cases
+      return createErrorResponse('internal_server_error', 'Unhandled request case', 500);
 
     } catch (error) {
       console.error("❌ [ERROR] Request processing failed:", error);
