@@ -40,10 +40,9 @@
 		}
 	],
 	"vars": {
-		
-		"AUTH0_ISSUER": "http://auth.scoots-test.com/",
-		"AUTH0_AUDIENCE": "http://auth.scoots-test.com/api/v2/",
-		"JWKS_URL": "http://auth.scoots-test.com/.well-known/jwks.json",
+		"AUTH0_ISSUER": "https://dev-luzn47z5slx3svx7.us.auth0.com/",
+		"AUTH0_AUDIENCE": "https://dev-luzn47z5slx3svx7.us.auth0.com/api/v2/",
+		"JWKS_URL": "https://dev-luzn47z5slx3svx7.us.auth0.com/.well-known/jwks.json",
 		"USER_SERVICE_URL": "https://v2-user.bigscoots.dev",
 		"SITE_SERVICE_URL": "https://v2-sites.bigscoots.dev"
 	}
