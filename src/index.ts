@@ -5,6 +5,8 @@ import { DurableObject } from "cloudflare:workers";
 import { Env, NonceReplayGuardStub, AuthError } from "./types/interfaces";
 import { JWTHeader, JWTPayload, JWKSKey, JWKS } from "./types/jwt-types";
 import { HMACHeaders, APIKeyMetadata, HMACPayload } from "./types/hmac-types";
+import { createErrorResponse } from "./utils/error-handlers";
+import { detectAuthMethod, extractJWTToken, parseScopes } from "./utils/request-utils";
 
 // Public routes that bypass authentication
 const PUBLIC_ROUTES: string[] = [
@@ -293,10 +295,7 @@ async function validateJWT(token: string, env: Env): Promise<JWTPayload> {
  * const scopes = parseScopes("sites:read users:write billing:admin");
  * // Returns: ["sites:read", "users:write", "billing:admin"]
  */
-function parseScopes(scope?: string): string[] {
-  if (!scope) return [];
-  return scope.split(' ').filter(s => s.length > 0);
-}
+// moved to ./utils/request-utils
 
 /**
  * Auth Utility: Create standardized JSON error response
@@ -313,21 +312,7 @@ function parseScopes(scope?: string): string[] {
  * return createErrorResponse("Unauthorized", "JWT signature verification failed", 401);
  * // Returns: Response with {"statusCode":401,"message":"JWT signature verification failed","data":"Unauthorized"}
  */
-function createErrorResponse(error: string, description: string, status: number): Response {
-  const errorBody: AuthError = {
-    statusCode: status,
-    message: description,
-    data: error
-  };
-
-  return new Response(JSON.stringify(errorBody), {
-    status,
-    headers: {
-      'Content-Type': 'application/json',
-      'Cache-Control': 'no-store'
-    }
-  });
-}
+// moved to ./utils/error-handlers
 
 /**
  * Route Utility: Check if route bypasses authentication
@@ -366,24 +351,7 @@ function isPublicRoute(pathname: string): boolean {
  * const authMethod = detectAuthMethod(request);
  * // Returns: "jwt", "hmac", or "none"
  */
-function detectAuthMethod(request: Request): 'jwt' | 'hmac' | 'none' {
-  const authHeader = request.headers.get('Authorization');
-  const keyIdHeader = request.headers.get('X-Key-Id');
-  
-  console.log(`🔍 [AUTH-DETECT] Authorization header: ${authHeader ? 'present' : 'missing'}`);
-  console.log(`🔍 [AUTH-DETECT] X-Key-Id header: ${keyIdHeader ? keyIdHeader : 'missing'}`);
-
-  if (authHeader && authHeader.startsWith('Bearer ')) {
-    console.log(`✅ [AUTH-DETECT] Detected JWT authentication`);
-    return 'jwt';
-  } else if (keyIdHeader) {
-    console.log(`✅ [AUTH-DETECT] Detected HMAC authentication with keyId: ${keyIdHeader}`);
-    return 'hmac';
-  }
-  
-  console.log(`❌ [AUTH-DETECT] No authentication method detected`);
-  return 'none';
-}
+// moved to ./utils/request-utils
 
 /**
  * JWT Utility: Extract Bearer token from Authorization header
@@ -398,14 +366,7 @@ function detectAuthMethod(request: Request): 'jwt' | 'hmac' | 'none' {
  * const token = extractJWTToken(request);
  * // Returns: "eyJhbGciOiJSUzI1NiIs..." (without "Bearer " prefix)
  */
-function extractJWTToken(request: Request): string | null {
-  const authHeader = request.headers.get('Authorization');
-  if (!authHeader || !authHeader.startsWith('Bearer ')) {
-    return null;
-  }
-  
-  return authHeader.slice(7); // Remove 'Bearer ' prefix
-}
+// moved to ./utils/request-utils
 
 /**
  * Routing Utility: Determine target service for request path
