@@ -7,6 +7,7 @@
 		"dev": "wrangler dev",
 		"start": "wrangler dev",
 		"test": "vitest",
+		"test:hmac": "node test/hmac-gateway-test.js",
 		"cf-typegen": "wrangler types"
 	},
 	"devDependencies": {
