@@ -2,84 +2,9 @@
 // JWT Authentication Gateway for BigScoots API
 
 import { DurableObject } from "cloudflare:workers";
-
-interface Env {
-  AUTH0_ISSUER: string;
-  AUTH0_AUDIENCE: string;
-  JWKS_URL: string;
-  KV: KVNamespace;
-  NONCE_TRACKER: DurableObjectNamespace;
-  USER_SERVICE_URL: string;
-  SITE_SERVICE_URL: string;
-}
-
-interface NonceReplayGuardStub {
-  checkAndStore(nonce: string, timestamp: number): Promise<boolean>;
-  getStats(): Promise<{ activeNonces: number; oldestTimestamp: number | null; newestTimestamp: number | null }>;
-}
-
-interface JWKSKey {
-  kty: string;
-  use: string;
-  kid: string;
-  x5c: string[];
-  n: string;
-  e: string;
-  alg: string;
-}
-
-interface JWKS {
-  keys: JWKSKey[];
-}
-
-interface JWTHeader {
-  alg: string;
-  typ: string;
-  kid: string;
-}
-
-interface JWTPayload {
-  iss: string;
-  sub: string;
-  aud: string | string[];
-  exp: number;
-  iat: number;
-  scope?: string;
-  "https://v2-bigscoots.com/role"?: string;
-  "https://v2-bigscoots.com/email"?: string;
-  "https://v2-bigscoots.com/email_verified"?: boolean;
-}
-
-interface AuthError {
-  statusCode: number;
-  message: string;
-  data: string;
-}
-
-interface HMACHeaders {
-  keyId: string;
-  timestamp: string;
-  nonce: string;
-  signature: string;
-  contentSHA256: string;
-}
-
-interface APIKeyMetadata {
-  secret: string;
-  orgId: string;
-  scopes: string[];
-  rateLimit?: {
-    minute: number;
-    hour: number;
-    day: number;
-  };
-}
-
-interface HMACPayload {
-  keyId: string;
-  orgId: string;
-  scopes: string[];
-}
+import { Env, NonceReplayGuardStub, AuthError } from "./types/interfaces";
+import { JWTHeader, JWTPayload, JWKSKey, JWKS } from "./types/jwt-types";
+import { HMACHeaders, APIKeyMetadata, HMACPayload } from "./types/hmac-types";
 
 // Public routes that bypass authentication
 const PUBLIC_ROUTES: string[] = [
