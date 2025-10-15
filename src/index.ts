@@ -7,31 +7,8 @@ import { JWTHeader, JWTPayload, JWKSKey, JWKS } from "./types/jwt-types";
 import { HMACHeaders, APIKeyMetadata, HMACPayload } from "./types/hmac-types";
 import { createErrorResponse } from "./utils/error-handlers";
 import { detectAuthMethod, extractJWTToken, parseScopes } from "./utils/request-utils";
-
-// Public routes that bypass authentication
-const PUBLIC_ROUTES: string[] = [
-  // User Management public routes only
-  '/user-mgmt/auth/login',
-  '/user-mgmt/auth/refresh', 
-  '/user-mgmt/auth/verify-oob-code',
-  '/user-mgmt/auth/social-login',
-  '/authentication/get-token'
-  // All site-mgmt routes removed - now require authentication
-];
-
-// Service routing configuration
-const ROUTE_CONFIG = [
-  {
-    prefixes: ['/user-mgmt/'],
-    serviceUrl: 'USER_SERVICE_URL',
-    serviceName: 'User Management'
-  },
-  {
-    prefixes: ['/site-mgmt/', '/sites/', '/authentication/', '/dashboard/', '/management/', '/service/', '/plans/'],
-    serviceUrl: 'SITE_SERVICE_URL', 
-    serviceName: 'Site Management'
-  }
-] as const;
+import { isPublicRoute, getRouteForPath } from "./routing/route-matcher";
+import { createServiceRequest } from "./routing/service-request";
 
 // HMAC Configuration
 const CLOCK_SKEW_SECONDS = 300; // ±5 minutes
@@ -276,174 +253,14 @@ async function validateJWT(token: string, env: Env): Promise<JWTPayload> {
   }
 }
 
-/**
- * JWT Utility: Parse space-separated scope string into array
- * 
- * Converts OAuth2 scope string format into array for easier processing.
- * Handles empty/missing scope strings gracefully.
- * 
- * @param scope - Space-separated scope string from JWT (e.g., "read write admin")
- * @returns Array of individual scope strings
- * 
- * @example
- * const scopes = parseScopes("sites:read users:write billing:admin");
- * // Returns: ["sites:read", "users:write", "billing:admin"]
- */
 // moved to ./utils/request-utils
 
-/**
- * Auth Utility: Create standardized JSON error response
- * 
- * Generates consistent error responses with proper HTTP status codes and JSON format.
- * Used for both JWT and HMAC authentication failures.
- * 
- * @param error - Error code (e.g., "Unauthorized", "Forbidden")
- * @param description - Human-readable error description
- * @param status - HTTP status code (401, 403, 429, etc.)
- * @returns Response object with JSON error body and appropriate headers
- * 
- * @example
- * return createErrorResponse("Unauthorized", "JWT signature verification failed", 401);
- * // Returns: Response with {"statusCode":401,"message":"JWT signature verification failed","data":"Unauthorized"}
- */
 // moved to ./utils/error-handlers
 
-/**
- * Route Utility: Check if route bypasses authentication
- * 
- * Determines whether a request path should skip JWT/HMAC validation.
- * Useful for health checks, documentation, and public endpoints.
- * 
- * @param pathname - Request path from URL (e.g., "/health", "/api/docs")
- * @returns true if route is public, false if authentication required
- * 
- * @example
- * const isPublic = isPublicRoute("/health");
- * // Returns: true (if "/health" is in PUBLIC_ROUTES array)
- */
-function isPublicRoute(pathname: string): boolean {
-  return PUBLIC_ROUTES.some(route => {
-    // Exact match for root endpoints that shouldn't match sub-paths
-    if (route === '/sites' || route === '/service') {
-      return pathname === route;
-    }
-    // Prefix match for auth endpoints that should match sub-paths
-    return pathname.startsWith(route);
-  });
-}
-
-/**
- * Auth Detection: Determine authentication method from request headers
- * 
- * Examines request headers to identify whether client is using JWT or HMAC authentication.
- * Enables dual authentication support on the same endpoints.
- * 
- * @param request - HTTP request object
- * @returns 'jwt' if Authorization header present, 'hmac' if X-Key-Id present, 'none' otherwise
- * 
- * @example
- * const authMethod = detectAuthMethod(request);
- * // Returns: "jwt", "hmac", or "none"
- */
+// moved to ./routing/route-matcher
 // moved to ./utils/request-utils
 
-/**
- * JWT Utility: Extract Bearer token from Authorization header
- * 
- * Parses Authorization header to extract JWT token, removing "Bearer " prefix.
- * Returns null if header is missing or doesn't follow Bearer token format.
- * 
- * @param request - HTTP request object
- * @returns JWT token string or null if not found/invalid format
- * 
- * @example
- * const token = extractJWTToken(request);
- * // Returns: "eyJhbGciOiJSUzI1NiIs..." (without "Bearer " prefix)
- */
-// moved to ./utils/request-utils
-
-/**
- * Routing Utility: Determine target service for request path
- * 
- * Matches request path against configured route prefixes to determine which backend service
- * should handle the request. Supports multiple prefixes per service.
- * 
- * @param pathname - Request path from URL (e.g., "/sites/123", "/user-mgmt/profile")
- * @returns Route configuration object or null if no match found
- * 
- * @example
- * const route = getRouteForPath("/sites/abc-123");
- * // Returns: { prefixes: ["/sites/", ...], serviceUrl: "SITE_SERVICE_URL", serviceName: "Site Management" }
- */
-function getRouteForPath(pathname: string): typeof ROUTE_CONFIG[number] | null {
-  // Normalize path - ensure it ends with / for prefix matching
-  const normalizedPath = pathname.endsWith('/') ? pathname : pathname + '/';
-  
-  for (const route of ROUTE_CONFIG) {
-    for (const prefix of route.prefixes) {
-      if (normalizedPath.startsWith(prefix)) {
-        return route;
-      }
-    }
-  }
-  
-  return null;
-}
-
-/**
- * Routing Utility: Create request for backend service
- * 
- * Creates a new request object targeting the specified backend service while preserving
- * the original path, query parameters, headers, and body. Adds identity headers from authentication.
- * For JWT requests, keeps the Authorization header so backend can decode the token.
- * For HMAC requests, removes all authentication headers.
- * 
- * @param originalRequest - Original client request
- * @param serviceUrl - Backend service base URL
- * @param pathname - Request path to preserve
- * @param identityHeaders - Headers to add from authentication (X-Auth-Type, X-User-Id, etc.)
- * @returns New request object for backend service
- */
-function createServiceRequest(
-  originalRequest: Request, 
-  serviceUrl: string, 
-  pathname: string,
-  identityHeaders: Record<string, string>
-): Request {
-  const url = new URL(originalRequest.url);
-  const targetUrl = `${serviceUrl}${pathname}${url.search}`;
-  
-  // Copy all original headers
-  const newHeaders = new Headers(originalRequest.headers);
-  
-  // Remove HMAC authentication headers (they shouldn't reach backend services)
-  newHeaders.delete('X-Key-Id');      // Remove HMAC headers
-  newHeaders.delete('X-Timestamp');
-  newHeaders.delete('X-Nonce');
-  newHeaders.delete('X-Signature');
-  newHeaders.delete('X-Content-SHA256');
-  
-  // Keep Authorization header for JWT requests, remove for HMAC requests
-  if (identityHeaders['X-Auth-Type'] === 'hmac') {
-    newHeaders.delete('Authorization'); // Remove for HMAC (no JWT to pass)
-  }
-  // For JWT requests, keep Authorization header so backend can decode token
-  
-  // Add identity headers from authentication
-  Object.entries(identityHeaders).forEach(([key, value]) => {
-    newHeaders.set(key, value);
-  });
-  
-  // Update Host header to match target service
-  const targetHost = new URL(serviceUrl).host;
-  newHeaders.set('Host', targetHost);
-  
-  return new Request(targetUrl, {
-    method: originalRequest.method,
-    headers: newHeaders,
-    body: originalRequest.body,
-  });
-}
+// moved to ./routing/service-request
 
 // cleanupExpiredNonces function removed - now handled automatically by Durable Objects
 
