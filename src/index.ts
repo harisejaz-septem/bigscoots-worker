@@ -51,9 +51,9 @@ interface JWTPayload {
 }
 
 interface AuthError {
-  error: string;
-  error_description: string;
-  status: number;
+  statusCode: number;
+  message: string;
+  data: string;
 }
 
 interface HMACHeaders {
@@ -83,13 +83,19 @@ interface HMACPayload {
 
 // Public routes that bypass authentication
 const PUBLIC_ROUTES: string[] = [
+  // User Management public routes
   '/user-mgmt/auth/login',
   '/user-mgmt/auth/refresh', 
   '/user-mgmt/auth/verify-oob-code',
   '/user-mgmt/auth/social-login',
   '/authentication/get-token',
-  '/service',
-  '/sites'
+  
+  // Site Management public routes
+  '/site-mgmt/service',           // Fetch all services (exact match)
+  '/site-mgmt/service/',          // Service operations (prefix match)
+  '/site-mgmt/sites',             // Fetch sites list (exact match)  
+  '/site-mgmt/sites/',            // Site operations (prefix match)
+  '/site-mgmt/support-tickets'    // Support tickets (exact match)
 ];
 
 // Service routing configuration
@@ -100,7 +106,7 @@ const ROUTE_CONFIG = [
     serviceName: 'User Management'
   },
   {
-    prefixes: ['/sites/', '/authentication/', '/dashboard/', '/management/', '/service/', '/plans/'],
+    prefixes: ['/site-mgmt/', '/sites/', '/authentication/', '/dashboard/', '/management/', '/service/', '/plans/'],
     serviceUrl: 'SITE_SERVICE_URL', 
     serviceName: 'Site Management'
   }
@@ -373,20 +379,20 @@ function parseScopes(scope?: string): string[] {
  * Generates consistent error responses with proper HTTP status codes and JSON format.
  * Used for both JWT and HMAC authentication failures.
  * 
- * @param error - Error code (e.g., "invalid_token", "unauthorized")
+ * @param error - Error code (e.g., "Unauthorized", "Forbidden")
  * @param description - Human-readable error description
  * @param status - HTTP status code (401, 403, 429, etc.)
  * @returns Response object with JSON error body and appropriate headers
  * 
  * @example
- * return createErrorResponse("invalid_token", "JWT signature verification failed", 401);
- * // Returns: Response with {"error":"invalid_token","error_description":"...","status":401}
+ * return createErrorResponse("Unauthorized", "JWT signature verification failed", 401);
+ * // Returns: Response with {"statusCode":401,"message":"JWT signature verification failed","data":"Unauthorized"}
  */
 function createErrorResponse(error: string, description: string, status: number): Response {
   const errorBody: AuthError = {
-    error,
-    error_description: description,
-    status
+    statusCode: status,
+    message: description,
+    data: error
   };
 
   return new Response(JSON.stringify(errorBody), {
@@ -1044,7 +1050,7 @@ export default {
         const route = getRouteForPath(parsedUrl.pathname);
         if (!route) {
           console.log(`❌ [ROUTING] No route found for path: ${parsedUrl.pathname}`);
-          return createErrorResponse('not_found', 'Route not found', 404);
+          return createErrorResponse('Not Found', 'Route not found', 404);
         }
         
         const serviceUrl = env[route.serviceUrl as keyof Env] as string;
@@ -1064,7 +1070,7 @@ export default {
 
         if (authMethod === 'none') {
           return createErrorResponse(
-            'unauthorized',
+            'Unauthorized',
             'Authentication required. Provide either Bearer token or API key.',
             401
           );
@@ -1075,7 +1081,7 @@ export default {
           const token = extractJWTToken(request);
           if (!token) {
             return createErrorResponse(
-              'invalid_token',
+              'Unauthorized',
               'Bearer token is required but not provided',
               401
             );
@@ -1089,7 +1095,7 @@ export default {
           const route = getRouteForPath(parsedUrl.pathname);
           if (!route) {
             console.log(`❌ [ROUTING] No route found for authenticated path: ${parsedUrl.pathname}`);
-            return createErrorResponse('not_found', 'Route not found', 404);
+            return createErrorResponse('Not Found', 'Route not found', 404);
           }
           
           const serviceUrl = env[route.serviceUrl as keyof Env] as string;
@@ -1134,7 +1140,7 @@ export default {
           const route = getRouteForPath(parsedUrl.pathname);
           if (!route) {
             console.log(`❌ [ROUTING] No route found for authenticated path: ${parsedUrl.pathname}`);
-            return createErrorResponse('not_found', 'Route not found', 404);
+            return createErrorResponse('Not Found', 'Route not found', 404);
           }
           
           const serviceUrl = env[route.serviceUrl as keyof Env] as string;
@@ -1158,7 +1164,7 @@ export default {
       }
 
       // Fallback for unhandled cases
-      return createErrorResponse('internal_server_error', 'Unhandled request case', 500);
+      return createErrorResponse('Internal Server Error', 'Unhandled request case', 500);
 
     } catch (error) {
       console.error("❌ [ERROR] Request processing failed:", error);
@@ -1173,31 +1179,31 @@ export default {
         // JWT errors
         if (error.message.includes('expired')) {
           console.error(`❌ [ERROR] JWT token expired`);
-          return createErrorResponse('token_expired', error.message, 401);
+          return createErrorResponse('Unauthorized', error.message, 401);
         }
         if (error.message.includes('Invalid')) {
           console.error(`❌ [ERROR] Invalid JWT token`);
-          return createErrorResponse('invalid_token', error.message, 401);
+          return createErrorResponse('Unauthorized', error.message, 401);
         }
         
         // HMAC errors
         if (error.message.includes('timestamp') || error.message.includes('replay')) {
           console.error(`❌ [ERROR] HMAC timestamp/replay error`);
-          return createErrorResponse('invalid_request', error.message, 401);
+          return createErrorResponse('Unauthorized', error.message, 401);
         }
         if (error.message.includes('HMAC') || error.message.includes('signature')) {
           console.error(`❌ [ERROR] HMAC signature verification failed`);
-          return createErrorResponse('invalid_signature', error.message, 401);
+          return createErrorResponse('Unauthorized', error.message, 401);
         }
         if (error.message.includes('API key not found')) {
           console.error(`❌ [ERROR] API key not found in KV storage`);
-          return createErrorResponse('invalid_key', error.message, 401);
+          return createErrorResponse('Unauthorized', error.message, 401);
         }
       }
 
       // Generic server error
       return createErrorResponse(
-        'internal_server_error',
+        'Internal Server Error',
         'An unexpected error occurred',
         500
       );

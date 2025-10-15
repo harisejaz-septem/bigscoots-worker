@@ -50,7 +50,7 @@ Production: https://v2-cloudflare.bigscoots.dev
 The BigScoots v2 API Gateway is a **Cloudflare Worker** that acts as a single entry point for all API requests. It handles:
 
 - **Authentication** - Validates JWT tokens and HMAC signatures
-- **Authorization** - Checks scopes and permissions
+- **Authorization** - Checks scopes and permissions (To do)
 - **Routing** - Forwards requests to appropriate backend services
 - **Security** - Replay attack prevention, rate limiting
 - **Identity Injection** - Adds standardized headers for backend services
@@ -90,11 +90,12 @@ The BigScoots v2 API Gateway is a **Cloudflare Worker** that acts as a single en
 | Path Prefix | Backend Service | Description |
 |-------------|----------------|-------------|
 | `/user-mgmt/*` | `https://v2-user.bigscoots.dev` | User management, authentication |
-| `/sites/*` | `https://v2-sites.bigscoots.dev` | Site management |
+| `/site-mgmt/*` | `https://v2-sites.bigscoots.dev` | Site management (primary) |
+| `/sites/*` | `https://v2-sites.bigscoots.dev` | Site operations (legacy support) |
 | `/authentication/*` | `https://v2-sites.bigscoots.dev` | Authentication operations |
 | `/dashboard/*` | `https://v2-sites.bigscoots.dev` | Dashboard data |
 | `/management/*` | `https://v2-sites.bigscoots.dev` | Management operations |
-| `/service/*` | `https://v2-sites.bigscoots.dev` | Service operations |
+| `/service/*` | `https://v2-sites.bigscoots.dev` | Service operations (legacy support) |
 | `/plans/*` | `https://v2-sites.bigscoots.dev` | Plan management |
 
 ---
@@ -164,44 +165,6 @@ Audience: http://auth.scoots-test.com/api/v2/
 JWKS URL: http://auth.scoots-test.com/.well-known/jwks.json
 ```
 
-### How to Make JWT Requests
-
-#### Step 1: Obtain JWT Token from Auth0
-
-```javascript
-// Frontend - Login with Auth0
-import { Auth0Client } from '@auth0/auth0-spa-js';
-
-const auth0 = new Auth0Client({
-  domain: 'auth.scoots-test.com',
-  clientId: 'your-client-id',
-  authorizationParams: {
-    audience: 'http://auth.scoots-test.com/api/v2/'
-  }
-});
-
-// Login
-await auth0.loginWithRedirect();
-
-// Get access token
-const token = await auth0.getTokenSilently();
-```
-
-#### Step 2: Send Request with Bearer Token
-
-```javascript
-// Make authenticated API request
-const response = await fetch('https://v2-cloudflare.bigscoots.dev/user-mgmt/profile', {
-  method: 'GET',
-  headers: {
-    'Authorization': `Bearer ${token}`,
-    'Content-Type': 'application/json'
-  }
-});
-
-const data = await response.json();
-```
-
 ### JWT Request Headers
 
 **Required Headers:**
@@ -230,7 +193,7 @@ Accept: application/json
    X-User-Id: <user_id from sub claim>
    X-Client-Id: <user_id>
    X-Org-Id: null
-   X-Scopes: ["scope1", "scope2"]
+   X-Scopes: ["scope1", "scope2"] (Todo)
    X-Email: user@example.com
    X-Role: user
    ```
@@ -240,22 +203,26 @@ Accept: application/json
 
 ```json
 {
-  "header": {
-    "alg": "RS256",
-    "typ": "JWT",
-    "kid": "key-id-123"
+  "https://v2-bigscoots.com/role": [
+    "customer"
+  ],
+  "https://v2-bigscoots.com/hostbill": {
+    "customerId": 103,
+    "name": "mahnoor"
   },
-  "payload": {
-    "iss": "http://auth.scoots-test.com/",
-    "sub": "auth0|user123",
-    "aud": "http://auth.scoots-test.com/api/v2/",
-    "exp": 1728200000,
-    "iat": 1728196400,
-    "scope": "openid profile email",
-    "https://v2-bigscoots.com/role": "admin",
-    "https://v2-bigscoots.com/email": "user@example.com",
-    "https://v2-bigscoots.com/email_verified": true
-  }
+  "https://v2-bigscoots.com/email": "mahnoor.feroz09@gmail.com",
+  "https://v2-bigscoots.com/email_verified": true,
+  "iss": "https://dev-luzn47z5slx3svx7.us.auth0.com/",
+  "sub": "auth0|68ecfd6de83e92ee1be5c4bb",
+  "aud": [
+    "https://dev-luzn47z5slx3svx7.us.auth0.com/api/v2/",
+    "https://dev-luzn47z5slx3svx7.us.auth0.com/userinfo"
+  ],
+  "iat": 1760512535,
+  "exp": 1760598935,
+  "scope": "openid email profile read:current_user update:current_user_metadata delete:current_user_metadata create:current_user_metadata create:current_user_device_credentials delete:current_user_device_credentials update:current_user_identities offline_access",
+  "gty": "password",
+  "azp": "Cwtk6oOvqiyKzDEp3m2ETGgVEUnW0fdt"
 }
 ```
 
@@ -263,11 +230,11 @@ Accept: application/json
 
 | Error Code | Reason | Response |
 |------------|--------|----------|
-| **401** | Token expired | `{"error":"token_expired","error_description":"Token has expired","status":401}` |
-| **401** | Invalid signature | `{"error":"invalid_token","error_description":"Invalid JWT signature","status":401}` |
-| **401** | Wrong issuer | `{"error":"invalid_token","error_description":"Invalid issuer","status":401}` |
-| **401** | Wrong audience | `{"error":"invalid_token","error_description":"Invalid audience","status":401}` |
-| **401** | Missing token | `{"error":"invalid_token","error_description":"Bearer token is required","status":401}` |
+| **401** | Token expired | `{"statusCode":401,"message":"Token has expired","data":"Unauthorized"}` |
+| **401** | Invalid signature | `{"statusCode":401,"message":"Invalid JWT signature","data":"Unauthorized"}` |
+| **401** | Wrong issuer | `{"statusCode":401,"message":"Invalid issuer","data":"Unauthorized"}` |
+| **401** | Wrong audience | `{"statusCode":401,"message":"Invalid audience","data":"Unauthorized"}` |
+| **401** | Missing token | `{"statusCode":401,"message":"Bearer token is required","data":"Unauthorized"}` |
 
 ---
 
@@ -279,7 +246,7 @@ HMAC authentication is for **enterprise clients** and **server-to-server** integ
 
 ### Getting API Credentials
 
-Contact BigScoots support to receive:
+Enterprise Clients will receive:
 - **Key ID** (public identifier) - Example: `live_org_test123`
 - **Secret** (private key) - Example: `base64randomsecret`
 
@@ -422,12 +389,12 @@ const bodyHash = "UNSIGNED-PAYLOAD";
 
 | Error Code | Reason | Response |
 |------------|--------|----------|
-| **401** | Missing headers | `{"error":"invalid_request","error_description":"Missing required HMAC headers","status":401}` |
-| **401** | Timestamp outside window | `{"error":"invalid_request","error_description":"Request timestamp is outside acceptable window","status":401}` |
-| **401** | Replay attack (nonce reused) | `{"error":"invalid_request","error_description":"Nonce has already been used","status":401}` |
-| **401** | Body hash mismatch | `{"error":"invalid_request","error_description":"Body hash mismatch","status":401}` |
-| **401** | Invalid signature | `{"error":"invalid_signature","error_description":"HMAC signature verification failed","status":401}` |
-| **401** | API key not found | `{"error":"invalid_key","error_description":"API key not found","status":401}` |
+| **401** | Missing headers | `{"statusCode":401,"message":"Missing required HMAC headers","data":"Unauthorized"}` |
+| **401** | Timestamp outside window | `{"statusCode":401,"message":"Request timestamp is outside acceptable window","data":"Unauthorized"}` |
+| **401** | Replay attack (nonce reused) | `{"statusCode":401,"message":"Nonce has already been used","data":"Unauthorized"}` |
+| **401** | Body hash mismatch | `{"statusCode":401,"message":"Body hash mismatch","data":"Unauthorized"}` |
+| **401** | Invalid signature | `{"statusCode":401,"message":"HMAC signature verification failed","data":"Unauthorized"}` |
+| **401** | API key not found | `{"statusCode":401,"message":"API key not found","data":"Unauthorized"}` |
 
 ---
 
@@ -443,27 +410,7 @@ These endpoints can be accessed without any authentication:
 | `/user-mgmt/auth/refresh` | GET | Refresh access token |
 | `/user-mgmt/auth/verify-oob-code` | GET | Verify OOB code |
 | `/user-mgmt/auth/social-login` | GET | Social login |
-| `/authentication/get-token` | GET | Get authentication token |
-| `/service` | GET | Get service list (exact match only) |
-| `/sites` | GET | Get sites list (exact match only) |
 
-**⚠️ Important:** Sub-paths are NOT public:
-- ✅ `/sites` → Public
-- ❌ `/sites/abc-123` → Requires authentication
-- ✅ `/service` → Public  
-- ❌ `/service/abc-123` → Requires authentication
-
-### Making Public Requests
-
-```javascript
-// No authentication headers required
-const response = await fetch('https://v2-cloudflare.bigscoots.dev/sites', {
-  method: 'GET',
-  headers: {
-    'Content-Type': 'application/json'
-  }
-});
-```
 
 ---
 
@@ -503,9 +450,9 @@ Accept: application/json
 **Error Response (4xx, 5xx):**
 ```json
 {
-  "error": "error_code",
-  "error_description": "Human-readable error message",
-  "status": 401
+  "statusCode": 401,
+  "message": "Human-readable error message",
+  "data": "Unauthorized"
 }
 ```
 
@@ -535,9 +482,9 @@ All errors follow this structure:
 
 ```json
 {
-  "error": "error_code",
-  "error_description": "Detailed error message",
-  "status": 401
+  "statusCode": 401,
+  "message": "Detailed error message",
+  "data": "Unauthorized"
 }
 ```
 
@@ -557,82 +504,7 @@ All errors follow this structure:
 | **429** | `too_many_requests` | Rate limit exceeded | Implement backoff |
 | **500** | `internal_server_error` | Server error | Contact support |
 
-### Error Handling Best Practices
-
-**Frontend (JWT):**
-```javascript
-async function makeAuthenticatedRequest(url, options) {
-  try {
-    const response = await fetch(url, options);
-    
-    if (response.status === 401) {
-      const error = await response.json();
-      
-      if (error.error === 'token_expired') {
-        // Refresh token and retry
-        const newToken = await auth0.getTokenSilently({ cacheMode: 'off' });
-        options.headers['Authorization'] = `Bearer ${newToken}`;
-        return fetch(url, options);
-      }
-    }
-    
-    if (!response.ok) {
-      const error = await response.json();
-      throw new Error(error.error_description);
-    }
-    
-    return response.json();
-  } catch (error) {
-    console.error('Request failed:', error);
-    throw error;
-  }
-}
-```
-
-**Backend (HMAC):**
-```javascript
-async function makeHMACRequest(url, method, body) {
-  try {
-    const signature = generateHMACSignature(/* ... */);
-    const response = await fetch(url, {
-      method,
-      headers: {
-        'X-Key-Id': API_KEY_ID,
-        'X-Timestamp': timestamp,
-        'X-Nonce': nonce,
-        'X-Signature': signature,
-        // ... other headers
-      },
-      body: body ? JSON.stringify(body) : undefined
-    });
-    
-    if (response.status === 401) {
-      const error = await response.json();
-      
-      if (error.error_description.includes('timestamp')) {
-        // Clock skew - sync time and retry
-        console.error('Clock skew detected - sync NTP');
-      } else if (error.error_description.includes('replay')) {
-        // Nonce reused - generate new nonce
-        console.error('Nonce reused - generate new UUID');
-      }
-    }
-    
-    if (!response.ok) {
-      throw new Error(`Request failed: ${response.status}`);
-    }
-    
-    return response.json();
-  } catch (error) {
-    console.error('HMAC request failed:', error);
-    throw error;
-  }
-}
-```
-
----
-
-## Rate Limiting
+## Rate Limiting (To do)
 
 ### Current Rate Limits
 
@@ -673,402 +545,6 @@ async function makeRequestWithBackoff(url, options, maxRetries = 3) {
   
   throw new Error('Max retries exceeded');
 }
-```
-
----
-
-## Code Examples
-
-### Frontend: React with Auth0
-
-```javascript
-import React, { useEffect, useState } from 'react';
-import { useAuth0 } from '@auth0/auth0-react';
-
-function UserProfile() {
-  const { getAccessTokenSilently } = useAuth0();
-  const [profile, setProfile] = useState(null);
-  
-  useEffect(() => {
-    async function fetchProfile() {
-      try {
-        // Get JWT token
-        const token = await getAccessTokenSilently({
-          authorizationParams: {
-            audience: 'http://auth.scoots-test.com/api/v2/'
-          }
-        });
-        
-        // Make authenticated request
-        const response = await fetch(
-          'https://v2-cloudflare.bigscoots.dev/user-mgmt/profile',
-          {
-            headers: {
-              'Authorization': `Bearer ${token}`,
-              'Content-Type': 'application/json'
-            }
-          }
-        );
-        
-        if (!response.ok) {
-          throw new Error('Failed to fetch profile');
-        }
-        
-        const data = await response.json();
-        setProfile(data);
-      } catch (error) {
-        console.error('Error fetching profile:', error);
-      }
-    }
-    
-    fetchProfile();
-  }, [getAccessTokenSilently]);
-  
-  return (
-    <div>
-      {profile ? (
-        <pre>{JSON.stringify(profile, null, 2)}</pre>
-      ) : (
-        <p>Loading...</p>
-      )}
-    </div>
-  );
-}
-```
-
-### Backend: Node.js HMAC Client
-
-```javascript
-const crypto = require('crypto');
-
-class BigScootsHMACClient {
-  constructor(keyId, secret) {
-    this.keyId = keyId;
-    this.secret = secret;
-    this.baseUrl = 'https://v2-cloudflare.bigscoots.dev';
-  }
-  
-  // Generate canonical string
-  buildCanonicalString(method, path, query, headers, timestamp, nonce, bodyHash) {
-    const sortedQuery = query ? 
-      new URLSearchParams(query).toString() : '';
-    
-    // Signed headers (lowercase, sorted)
-    const signedHeaders = [];
-    for (const name of ['content-type', 'host'].sort()) {
-      const value = headers[name] || '';
-      signedHeaders.push(`${name}:${value}`);
-    }
-    
-    return [
-      method.toUpperCase(),
-      path,
-      sortedQuery,
-      ...signedHeaders,
-      timestamp,
-      nonce,
-      bodyHash
-    ].join('\n');
-  }
-  
-  // Generate HMAC signature
-  generateSignature(canonicalString) {
-    return crypto
-      .createHmac('sha256', this.secret)
-      .update(canonicalString)
-      .digest('base64');
-  }
-  
-  // Compute body hash
-  computeBodyHash(body) {
-    if (!body || body === '') {
-      return 'UNSIGNED-PAYLOAD';
-    }
-    return crypto.createHash('sha256').update(body).digest('hex');
-  }
-  
-  // Make HMAC request
-  async request(method, path, query = '', body = null) {
-    const timestamp = Math.floor(Date.now() / 1000).toString();
-    const nonce = crypto.randomUUID();
-    const bodyHash = this.computeBodyHash(body);
-    
-    const url = new URL(path, this.baseUrl);
-    if (query) url.search = query;
-    
-    const headers = {
-      'host': url.host,
-      'content-type': body ? 'application/json' : ''
-    };
-    
-    const canonicalString = this.buildCanonicalString(
-      method, url.pathname, query, headers, timestamp, nonce, bodyHash
-    );
-    
-    const signature = this.generateSignature(canonicalString);
-    
-    const requestHeaders = {
-      'X-Key-Id': this.keyId,
-      'X-Timestamp': timestamp,
-      'X-Nonce': nonce,
-      'X-Signature': signature,
-      'X-Content-SHA256': bodyHash,
-      'Host': headers.host
-    };
-    
-    if (body) {
-      requestHeaders['Content-Type'] = 'application/json';
-    }
-    
-    const response = await fetch(url.toString(), {
-      method,
-      headers: requestHeaders,
-      body: body || undefined
-    });
-    
-    if (!response.ok) {
-      const error = await response.json();
-      throw new Error(`${error.error}: ${error.error_description}`);
-    }
-    
-    return response.json();
-  }
-  
-  // Convenience methods
-  async get(path, query = '') {
-    return this.request('GET', path, query);
-  }
-  
-  async post(path, body, query = '') {
-    return this.request('POST', path, query, JSON.stringify(body));
-  }
-  
-  async put(path, body, query = '') {
-    return this.request('PUT', path, query, JSON.stringify(body));
-  }
-  
-  async delete(path, query = '') {
-    return this.request('DELETE', path, query);
-  }
-}
-
-// Usage
-const client = new BigScootsHMACClient(
-  'live_org_test123',
-  'base64randomsecret'
-);
-
-// Get sites
-const sites = await client.get('/sites/service-123/site-456');
-
-// Create site
-const newSite = await client.post('/sites/service-123', {
-  domain: 'example.com',
-  plan: 'basic'
-});
-```
-
-### Python HMAC Client
-
-```python
-import hmac
-import hashlib
-import base64
-import time
-import uuid
-from urllib.parse import urlencode, urlparse
-import requests
-
-class BigScootsHMACClient:
-    def __init__(self, key_id, secret):
-        self.key_id = key_id
-        self.secret = secret
-        self.base_url = 'https://v2-cloudflare.bigscoots.dev'
-    
-    def build_canonical_string(self, method, path, query, headers, timestamp, nonce, body_hash):
-        sorted_query = urlencode(sorted(query.items())) if query else ''
-        
-        # Signed headers (lowercase, sorted)
-        signed_headers = []
-        for name in sorted(['content-type', 'host']):
-            value = headers.get(name, '')
-            signed_headers.append(f'{name}:{value}')
-        
-        parts = [
-            method.upper(),
-            path,
-            sorted_query,
-            *signed_headers,
-            timestamp,
-            nonce,
-            body_hash
-        ]
-        
-        return '\n'.join(parts)
-    
-    def generate_signature(self, canonical_string):
-        signature = hmac.new(
-            self.secret.encode('utf-8'),
-            canonical_string.encode('utf-8'),
-            hashlib.sha256
-        ).digest()
-        return base64.b64encode(signature).decode('utf-8')
-    
-    def compute_body_hash(self, body):
-        if not body:
-            return 'UNSIGNED-PAYLOAD'
-        return hashlib.sha256(body.encode('utf-8')).hexdigest()
-    
-    def request(self, method, path, query=None, body=None):
-        timestamp = str(int(time.time()))
-        nonce = str(uuid.uuid4())
-        body_hash = self.compute_body_hash(body)
-        
-        url = f'{self.base_url}{path}'
-        parsed = urlparse(url)
-        
-        headers = {
-            'host': parsed.netloc,
-            'content-type': 'application/json' if body else ''
-        }
-        
-        canonical_string = self.build_canonical_string(
-            method, parsed.path, query or {}, headers, timestamp, nonce, body_hash
-        )
-        
-        signature = self.generate_signature(canonical_string)
-        
-        request_headers = {
-            'X-Key-Id': self.key_id,
-            'X-Timestamp': timestamp,
-            'X-Nonce': nonce,
-            'X-Signature': signature,
-            'X-Content-SHA256': body_hash,
-            'Host': headers['host']
-        }
-        
-        if body:
-            request_headers['Content-Type'] = 'application/json'
-        
-        response = requests.request(
-            method,
-            url,
-            headers=request_headers,
-            params=query,
-            data=body
-        )
-        
-        response.raise_for_status()
-        return response.json()
-    
-    def get(self, path, query=None):
-        return self.request('GET', path, query)
-    
-    def post(self, path, data, query=None):
-        import json
-        return self.request('POST', path, query, json.dumps(data))
-
-# Usage
-client = BigScootsHMACClient('live_org_test123', 'base64randomsecret')
-
-# Get sites
-sites = client.get('/sites/service-123/site-456')
-
-# Create site
-new_site = client.post('/sites/service-123', {
-    'domain': 'example.com',
-    'plan': 'basic'
-})
-```
-
----
-
-## Testing Guide
-
-### Test Endpoints
-
-**Built-in test routes (no auth):**
-```bash
-# Simple text response
-curl https://v2-cloudflare.bigscoots.dev/hi
-# Response: 👋 Hi from BigScoots Worker!
-
-# JSON response
-curl https://v2-cloudflare.bigscoots.dev/json
-# Response: {"message":"Hello JSON"}
-```
-
-### Testing JWT Authentication
-
-```bash
-# 1. Get JWT token from Auth0 (use Auth0 dashboard or SDK)
-TOKEN="your-jwt-token-here"
-
-# 2. Make authenticated request
-curl -X GET https://v2-cloudflare.bigscoots.dev/user-mgmt/profile \
-  -H "Authorization: Bearer ${TOKEN}" \
-  -H "Content-Type: application/json"
-```
-
-### Testing HMAC Authentication
-
-**Using the provided test script:**
-```bash
-cd test
-node hmac-test.js
-```
-
-**Manual testing with curl (requires signature generation):**
-```bash
-# See test/hmac-test.js for signature generation logic
-# Not recommended for manual testing
-```
-
-### Testing Public Routes
-
-```bash
-# Public route - no auth required
-curl https://v2-cloudflare.bigscoots.dev/sites
-
-# Protected sub-route - requires auth
-curl https://v2-cloudflare.bigscoots.dev/sites/abc-123
-# Response: 401 Unauthorized
-```
-
-### Test Scenarios
-
-**Scenario 1: Valid JWT Request**
-```
-✅ Valid token → 200 OK
-✅ Identity headers injected
-✅ Request routed to backend
-```
-
-**Scenario 2: Expired JWT Token**
-```
-❌ Expired token → 401 token_expired
-```
-
-**Scenario 3: Valid HMAC Request**
-```
-✅ Valid signature → 200 OK
-✅ Nonce tracked in Durable Object
-✅ Identity headers injected
-```
-
-**Scenario 4: HMAC Replay Attack**
-```
-❌ Reused nonce → 401 replay detected
-```
-
-**Scenario 5: HMAC Timestamp Too Old**
-```
-❌ Timestamp > 300s old → 401 timestamp outside window
-```
-
-**Scenario 6: Invalid Signature**
-```
-❌ Wrong signature → 401 signature verification failed
 ```
 
 ---
@@ -1205,50 +681,6 @@ const hash = 'UNSIGNED-PAYLOAD'; // ✅ For bodyless requests
 const hash = ''; // ❌ Wrong
 ```
 
-### Debug Checklist
-
-**JWT Issues:**
-- [ ] Token not expired (check `exp` claim)
-- [ ] Issuer matches: `http://auth.scoots-test.com/`
-- [ ] Audience matches: `http://auth.scoots-test.com/api/v2/`
-- [ ] Token format: `Bearer <token>` (with space)
-- [ ] Using access token, not ID token
-
-**HMAC Issues:**
-- [ ] All required headers present
-- [ ] Timestamp in seconds (not milliseconds)
-- [ ] Timestamp within ±300 seconds
-- [ ] New UUID nonce for each request
-- [ ] Headers lowercase in canonical string
-- [ ] Headers sorted alphabetically
-- [ ] Body hash matches actual body
-- [ ] GET/DELETE use `UNSIGNED-PAYLOAD`
-- [ ] Correct Key ID and secret
-- [ ] Content-Type included even if empty
-
-### Getting Help
-
-**Check Gateway Logs:**
-```bash
-# View real-time logs (requires Cloudflare access)
-wrangler tail
-```
-
-**Enable Debug Logging:**
-```javascript
-// Add to client code
-console.log('Request headers:', requestHeaders);
-console.log('Canonical string:', canonicalString);
-console.log('Signature:', signature);
-```
-
-**Contact Support:**
-- Email: support@bigscoots.com
-- Include: Request ID, timestamp, error message
-- **Never share:** API secrets, JWT tokens
-
----
-
 ## Quick Reference
 
 ### Gateway URL
@@ -1273,17 +705,6 @@ Host: v2-cloudflare.bigscoots.dev
 Content-Type: application/json
 ```
 
-### Service Routes
-
-| Path | Service | Auth Required |
-|------|---------|---------------|
-| `/user-mgmt/*` | User Management | ✅ Yes |
-| `/sites/*` | Site Management | ✅ Yes (except `/sites` exact) |
-| `/authentication/*` | Site Management | ✅ Yes |
-| `/dashboard/*` | Site Management | ✅ Yes |
-| `/management/*` | Site Management | ✅ Yes |
-| `/service/*` | Site Management | ✅ Yes (except `/service` exact) |
-| `/plans/*` | Site Management | ✅ Yes |
 
 ### Error Codes Quick Reference
 
@@ -1314,17 +735,5 @@ Content-Type: application/json
 3. **Include all required headers** (Key-Id, Timestamp, Nonce, Signature, Content-SHA256)
 4. **Use provided client libraries** for Node.js/Python
 5. **Handle errors** appropriately (timestamp, nonce, signature)
-
-### For All Teams
-
-- ✅ **Always use HTTPS**
-- ✅ **Never log secrets or tokens**
-- ✅ **Implement proper error handling**
-- ✅ **Use test endpoints** for development
-- ✅ **Check this guide** for troubleshooting
-
----
-
-**Questions?** Contact the platform team or refer to the detailed documentation in the `notes/` directory.
 
 Happy coding! 🚀
