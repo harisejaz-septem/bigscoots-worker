@@ -10,19 +10,13 @@ import { detectAuthMethod, extractJWTToken, parseScopes } from "./utils/request-
 
 // Public routes that bypass authentication
 const PUBLIC_ROUTES: string[] = [
-  // User Management public routes
+  // User Management public routes only
   '/user-mgmt/auth/login',
   '/user-mgmt/auth/refresh', 
   '/user-mgmt/auth/verify-oob-code',
   '/user-mgmt/auth/social-login',
-  '/authentication/get-token',
-  
-  // Site Management public routes
-  '/site-mgmt/service',           // Fetch all services (exact match)
-  '/site-mgmt/service/',          // Service operations (prefix match)
-  '/site-mgmt/sites',             // Fetch sites list (exact match)  
-  '/site-mgmt/sites/',            // Site operations (prefix match)
-  '/site-mgmt/support-tickets'    // Support tickets (exact match)
+  '/authentication/get-token'
+  // All site-mgmt routes removed - now require authentication
 ];
 
 // Service routing configuration

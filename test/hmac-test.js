@@ -126,40 +126,45 @@ async function runTests() {
     console.log('Test 1: Built-in Test Route (No Auth)');
     await tester.makeRequest('GET', '/hi');
 
-    // Test 2: Public route (no auth required)
-    console.log('\nTest 2: Public Route - Sites List');
-    await tester.makeRequest('GET', '/sites');
+    // Test 2: Public route - User Login (no auth required)
+    console.log('\nTest 2: Public Route - User Login');
+    await tester.makeRequest('POST', '/user-mgmt/auth/login', '', 
+      JSON.stringify({ email: 'test@example.com', password: 'password' }));
 
-    // Test 3: Protected route - User Management (requires auth)
-    console.log('\nTest 3: Protected Route - User Management');
+    // Test 3: Public route - Get Token (no auth required)
+    console.log('\nTest 3: Public Route - Get Token');
+    await tester.makeRequest('GET', '/authentication/get-token');
+
+    // Test 4: Protected route - User Profile (requires auth)
+    console.log('\nTest 4: Protected Route - User Profile');
     await tester.makeRequest('GET', '/user-mgmt/profile');
 
-    // Test 4: Protected route - Get Site Details (requires auth)
-    console.log('\nTest 4: Protected Route - Get Site Details');
-    await tester.makeRequest('GET', '/sites/service-123/site-456');
+    // Test 5: Protected route - Site Management (requires auth)
+    console.log('\nTest 5: Protected Route - Site Management');
+    await tester.makeRequest('GET', '/site-mgmt/sites');
 
-    // Test 5: POST request - Create New Site (requires auth)
-    console.log('\nTest 5: POST Request - Create New Site');
-    await tester.makeRequest(
-      'POST', 
-      '/sites/service-123', 
-      '',
-      JSON.stringify({ domain: 'example.com', plan: 'basic' })
-    );
+    // Test 6: Protected route - Site Details (requires auth)
+    console.log('\nTest 6: Protected Route - Site Details');
+    await tester.makeRequest('GET', '/site-mgmt/sites/site-123');
 
-    // Test 6: Invalid route (should return 404)
-    console.log('\nTest 6: Invalid Route Test');
+    // Test 7: POST request - Create Site (requires auth)
+    console.log('\nTest 7: POST Request - Create Site');
+    await tester.makeRequest('POST', '/site-mgmt/sites', '',
+      JSON.stringify({ domain: 'example.com', plan: 'basic' }));
+
+    // Test 8: Invalid route (should return 404)
+    console.log('\nTest 8: Invalid Route Test');
     await tester.makeRequest('GET', '/invalid/route');
 
-    // Test 7: Invalid signature (wrong secret)
-    console.log('\nTest 7: Invalid Signature Test');
+    // Test 9: Invalid signature (wrong secret)
+    console.log('\nTest 9: Invalid Signature Test');
     const badTester = new HMACTester(
       'https://v2-cloudflare.bigscoots.dev',
       'live_org_test123',
       'wrong-secret'
     );
     console.log('🔍 [TEST] Using wrong secret: "wrong-secret" vs stored: "base64randomsecret"');
-    await badTester.makeRequest('GET', '/sites/service-123/site-456');
+    await badTester.makeRequest('GET', '/user-mgmt/profile');
 
   } catch (error) {
     console.error('Test failed:', error);
