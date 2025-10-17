@@ -2,13 +2,13 @@
 // JWT Authentication Gateway for BigScoots API
 
 import { Env, NonceReplayGuardStub, AuthError } from "./types/interfaces";
-import { JWTHeader, JWTPayload, JWKSKey, JWKS } from "./types/jwt-types";
 import { HMACHeaders, APIKeyMetadata, HMACPayload } from "./types/hmac-types";
 import { createErrorResponse } from "./utils/error-handlers";
 import { detectAuthMethod, extractJWTToken, parseScopes } from "./utils/request-utils";
 import { isPublicRoute, getRouteForPath } from "./routing/route-matcher";
 import { createServiceRequest } from "./routing/service-request";
 import { NonceReplayGuard, NONCE_TTL } from "./durable-objects/nonce-replay-guard";
+import { validateJWT } from "./jwt/jwt-validator";
 
 // HMAC Configuration
 const CLOCK_SKEW_SECONDS = 300; // ±5 minutes
@@ -16,241 +16,12 @@ const SIGNED_HEADERS = ['host', 'content-type']; // Headers included in signatur
 
 // Nonce tracking now handled by Durable Objects (NonceReplayGuard class)
 
-// Global JWKS cache (simple in-memory for now)
-let jwksCache: JWKS | null = null;
-let jwksCacheTime = 0;
-const JWKS_CACHE_TTL = 3600000; // 1 hour in milliseconds
 
-/**
- * JWT Step 1: Fetch and cache JWKS from Auth0
- * 
- * Downloads RSA public keys from Auth0's JWKS endpoint and caches them for 1 hour.
- * JWKS (JSON Web Key Set) contains the public keys needed to verify JWT signatures.
- * 
- * @param jwksUrl - Auth0 JWKS endpoint URL (e.g., "https://dev-xyz.auth0.com/.well-known/jwks.json")
- * @returns Promise resolving to JWKS containing RSA public keys
- * 
- * @example
- * const jwks = await fetchJWKS("https://dev-xyz.auth0.com/.well-known/jwks.json");
- * // Returns: { keys: [{ kid: "abc123", kty: "RSA", n: "...", e: "AQAB" }] }
- */
-async function fetchJWKS(jwksUrl: string): Promise<JWKS> {
-  const now = Date.now();
-  
-  // Return cached JWKS if still valid
-  if (jwksCache && (now - jwksCacheTime) < JWKS_CACHE_TTL) {
-    return jwksCache;
-  }
 
-  try {
-    const response = await fetch(jwksUrl);
-    if (!response.ok) {
-      throw new Error(`JWKS fetch failed: ${response.status}`);
-    }
-    
-    jwksCache = await response.json() as JWKS;
-    jwksCacheTime = now;
-    
-    console.log("🔐 [JWKS] Successfully fetched and cached JWKS");
-    return jwksCache;
-  } catch (error) {
-    console.error("❌ [JWKS] Failed to fetch JWKS:", error);
-    throw error;
-  }
-}
 
-/**
- * JWT Step 2: Find matching public key by key ID
- * 
- * Searches through JWKS keys to find the one with matching 'kid' (key ID) from JWT header.
- * Each JWT header contains a 'kid' field that identifies which key was used to sign it.
- * 
- * @param jwks - JWKS object containing array of public keys
- * @param kid - Key ID from JWT header (e.g., "9E5ZC9HGi1BFyjH49M5OU")
- * @returns Matching JWK or null if not found
- * 
- * @example
- * const jwk = findJWKByKid(jwks, "9E5ZC9HGi1BFyjH49M5OU");
- * // Returns: { kid: "9E5ZC9HGi1BFyjH49M5OU", kty: "RSA", n: "...", e: "AQAB" }
- */
-function findJWKByKid(jwks: JWKS, kid: string): JWKSKey | null {
-  return jwks.keys.find(key => key.kid === kid) || null;
-}
 
-/**
- * JWT Step 3: Convert JWK to WebCrypto key for verification
- * 
- * Transforms Auth0's JWK format into a WebCrypto CryptoKey object that can verify RS256 signatures.
- * Configures the key specifically for RSASSA-PKCS1-v1_5 with SHA-256 hashing.
- * 
- * @param jwk - JSON Web Key with RSA components (n, e, kty, alg)
- * @returns Promise resolving to CryptoKey for signature verification
- */
-async function jwkToCryptoKey(jwk: JWKSKey): Promise<CryptoKey> {
-  const keyData = {
-    kty: jwk.kty,
-    n: jwk.n,
-    e: jwk.e,
-    alg: jwk.alg,
-    use: jwk.use,
-  };
 
-  return await crypto.subtle.importKey(
-    "jwk",
-    keyData,
-    {
-      name: "RSASSA-PKCS1-v1_5",
-      hash: "SHA-256",
-    },
-    false,
-    ["verify"]
-  );
-}
 
-/**
- * JWT Step 4: Decode JWT token without verification
- * 
- * Splits JWT into header and payload parts and base64url decodes them for inspection.
- * Does NOT verify signature - only extracts data for subsequent validation steps.
- * 
- * @param token - Complete JWT string (header.payload.signature)
- * @returns Object with decoded header and payload
- * 
- * @example
- * const { header, payload } = decodeJWT("eyJhbGc...header.eyJpc3M...payload.signature");
- * // Returns: { header: { alg: "RS256", kid: "abc123" }, payload: { sub: "user123", exp: 1234567890 } }
- */
-function decodeJWT(token: string): { header: JWTHeader; payload: JWTPayload } {
-  const parts = token.split('.');
-  if (parts.length !== 3) {
-    throw new Error("Invalid JWT format");
-  }
-
-  try {
-    const header = JSON.parse(atob(parts[0].replace(/-/g, '+').replace(/_/g, '/'))) as JWTHeader;
-    const payload = JSON.parse(atob(parts[1].replace(/-/g, '+').replace(/_/g, '/'))) as JWTPayload;
-    
-    return { header, payload };
-  } catch (error) {
-    throw new Error("Invalid JWT encoding");
-  }
-}
-
-/**
- * JWT Step 5: Verify JWT signature using WebCrypto
- * 
- * Cryptographically verifies that the JWT signature matches the header+payload using RSA public key.
- * Protects against token tampering by ensuring signature was created with the private key.
- * 
- * @param token - Complete JWT string
- * @param publicKey - RSA public key (from jwkToCryptoKey)
- * @returns Promise resolving to true if signature is valid, false otherwise
- */
-async function verifyJWTSignature(token: string, publicKey: CryptoKey): Promise<boolean> {
-  const parts = token.split('.');
-  const data = new TextEncoder().encode(`${parts[0]}.${parts[1]}`);
-  
-  // Decode signature from base64url
-  const signature = Uint8Array.from(
-    atob(parts[2].replace(/-/g, '+').replace(/_/g, '/')), 
-    c => c.charCodeAt(0)
-  );
-
-  try {
-    return await crypto.subtle.verify(
-      "RSASSA-PKCS1-v1_5",
-      publicKey,
-      signature,
-      data
-    );
-  } catch (error) {
-    console.error("❌ [JWT] Signature verification failed:", error);
-    return false;
-  }
-}
-
-/**
- * JWT Step 6: Validate JWT claims (security checks)
- * 
- * Verifies standard JWT claims to prevent security vulnerabilities:
- * - exp: Token not expired
- * - iss: Token issued by trusted Auth0 tenant
- * - aud: Token intended for our API
- * 
- * @param payload - Decoded JWT payload
- * @param expectedIssuer - Our Auth0 issuer URL
- * @param expectedAudience - Our API identifier
- * @throws Error if any claim validation fails
- */
-function validateJWTClaims(payload: JWTPayload, expectedIssuer: string, expectedAudience: string): void {
-  const now = Math.floor(Date.now() / 1000);
-
-  // Check expiration
-  if (payload.exp <= now) {
-    throw new Error("Token has expired");
-  }
-
-  // Check issuer
-  if (payload.iss !== expectedIssuer) {
-    throw new Error(`Invalid issuer. Expected: ${expectedIssuer}, Got: ${payload.iss}`);
-  }
-
-  // Check audience
-  const audiences = Array.isArray(payload.aud) ? payload.aud : [payload.aud];
-  if (!audiences.includes(expectedAudience)) {
-    throw new Error(`Invalid audience. Expected: ${expectedAudience}, Got: ${audiences.join(', ')}`);
-  }
-}
-
-/**
- * JWT Main Function: Complete JWT validation pipeline
- * 
- * Orchestrates the full JWT verification process from token to validated user data.
- * Combines all JWT steps: decode → find key → verify signature → validate claims.
- * 
- * @param token - Raw JWT from Authorization header
- * @param env - Worker environment with Auth0 configuration
- * @returns Promise resolving to validated JWT payload with user data
- * @throws Error if any validation step fails
- */
-async function validateJWT(token: string, env: Env): Promise<JWTPayload> {
-  try {
-    // Decode JWT to get header and payload
-    const { header, payload } = decodeJWT(token);
-
-    // Validate algorithm
-    if (header.alg !== "RS256") {
-      throw new Error(`Unsupported algorithm: ${header.alg}`);
-    }
-
-    // Fetch JWKS and find matching key
-    const jwks = await fetchJWKS(env.JWKS_URL);
-    const jwk = findJWKByKid(jwks, header.kid);
-    
-    if (!jwk) {
-      throw new Error(`No matching key found for kid: ${header.kid}`);
-    }
-
-    // Convert JWK to CryptoKey
-    const publicKey = await jwkToCryptoKey(jwk);
-
-    // Verify signature
-    const isValidSignature = await verifyJWTSignature(token, publicKey);
-    if (!isValidSignature) {
-      throw new Error("Invalid JWT signature");
-    }
-
-    // Validate claims
-    validateJWTClaims(payload, env.AUTH0_ISSUER, env.AUTH0_AUDIENCE);
-
-    console.log(`✅ [JWT] Token validated for user: ${payload.sub}`);
-    return payload;
-
-  } catch (error) {
-    console.error("❌ [JWT] Validation failed:", error);
-    throw error;
-  }
-}
 
 /**
  * HMAC Step 1: Extract required HMAC headers from request
